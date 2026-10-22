@@ -1,11 +1,4 @@
 # -----------------------------------------------------------------------------------------
-# Registering vault provider 
-# -----------------------------------------------------------------------------------------
-data "vault_generic_secret" "redshift" {
-  path = "secret/redshift"
-}
-
-# -----------------------------------------------------------------------------------------
 # IAM role for batch 
 # -----------------------------------------------------------------------------------------
 data "aws_iam_policy_document" "batch_assume_role" {
@@ -54,50 +47,54 @@ module "vpc" {
 }
 
 # Security Group
-resource "aws_security_group" "security_group" {
-  name   = "security-group"
+module "batch_job_security_group" {
+  source = "./modules/security-groups"
+  name   = "batch-job-security-group"
   vpc_id = module.vpc.vpc_id
-
-  ingress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
+  ingress_rules = [
+    {
+      description     = "Traffic"
+      from_port       = 0
+      to_port         = 0
+      protocol        = "tcp"
+      security_groups = []
+      cidr_blocks     = ["0.0.0.0/0"]
+    }
+  ]
+  egress_rules = [
+    {
+      description = "Allow all outbound traffic"
+      from_port   = 0
+      to_port     = 0
+      protocol    = "-1"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  ]
   tags = {
     Name = "security-group"
   }
 }
 
-resource "aws_security_group" "redshift_sg" {
-  name   = "redshift-sg"
+module "lambda_sg" {
+  source = "./modules/security-groups"
+  name   = "lambda-sg"
   vpc_id = module.vpc.vpc_id
 
-  ingress {
-    description = "Redshift Security Group"
-    from_port   = 5439
-    to_port     = 5439
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  ingress_rules = []
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  egress_rules = [
+    {
+      description     = "HTTPS to VPC endpoints and internet"
+      from_port       = 443
+      to_port         = 443
+      protocol        = "tcp"
+      cidr_blocks     = ["0.0.0.0/0"]
+      security_groups = []
+    }
+  ]
 
   tags = {
-    Name = "security-group"
+    Name = "lambda-sg"
   }
 }
 
@@ -114,17 +111,89 @@ module "ecr" {
 }
 
 # -----------------------------------------------------------------------------------------
-# Secrets Manager
+# S3 Configuration
 # -----------------------------------------------------------------------------------------
-module "db_credentials" {
-  source                  = "./modules/secrets-manager"
-  name                    = "rds-secrets"
-  description             = "rds-secrets"
-  recovery_window_in_days = 0
-  secret_string = jsonencode({
-    username = tostring(data.vault_generic_secret.redshift.data["username"])
-    password = tostring(data.vault_generic_secret.redshift.data["password"])
+module "source_bucket" {
+  source             = "./modules/s3"
+  bucket_name        = "source-bucket"
+  objects            = []
+  versioning_enabled = "Enabled"
+  cors = [
+    {
+      allowed_headers = ["*"]
+      allowed_methods = ["PUT"]
+      allowed_origins = ["*"]
+      max_age_seconds = 3000
+    }
+  ]
+  bucket_policy = ""
+  force_destroy = true
+  bucket_notification = {
+    queue = [
+
+      {
+        queue_arn = module.job_queue.arn
+        events    = ["s3:ObjectCreated:*"]
+      }
+    ]
+    lambda_function = []
+  }
+}
+
+module "destination_bucket" {
+  source             = "./modules/s3"
+  bucket_name        = "destination-bucket"
+  objects            = []
+  versioning_enabled = "Enabled"
+  cors = [
+    {
+      allowed_headers = ["*"]
+      allowed_methods = ["PUT"]
+      allowed_origins = ["*"]
+      max_age_seconds = 3000
+    }
+  ]
+  bucket_policy = ""
+  force_destroy = true
+  bucket_notification = {
+    queue           = []
+    lambda_function = []
+  }
+}
+
+# -----------------------------------------------------------------------------------------
+# SQS Configuration
+# -----------------------------------------------------------------------------------------
+module "job_queue" {
+  source                     = "./modules/sqs"
+  queue_name                 = "job-queue"
+  delay_seconds              = 0
+  maxReceiveCount            = 3
+  max_message_size           = 262144
+  message_retention_seconds  = 345600
+  visibility_timeout_seconds = 180
+  receive_wait_time_seconds  = 20
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Service = "s3.amazonaws.com" }
+        Action    = "sqs:SendMessage"
+        Resource  = "arn:aws:sqs:${var.region}:*:job-queue"
+        Condition = {
+          ArnEquals = {
+            "aws:SourceArn" = module.source_bucket.arn
+          }
+        }
+      }
+    ]
   })
+
+  tags = {
+    Name = "job-queue"
+  }
 }
 
 # -----------------------------------------------------------------------------------------
@@ -136,29 +205,99 @@ resource "aws_cloudwatch_log_group" "batch_logs" {
 }
 
 # -----------------------------------------------------------------------------------------
-# Redshift Configuration
+# DynamoDb Configuration ( For storing job metadata and state)
 # -----------------------------------------------------------------------------------------
-module "redshift_serverless" {
-  source              = "./modules/redshift"
-  namespace_name      = "batch-namespace"
-  admin_username      = tostring(data.vault_generic_secret.redshift.data["username"])
-  admin_user_password = tostring(data.vault_generic_secret.redshift.data["password"])
-  db_name             = "records"
-  workgroups = [
+module "job_metadata_state" {
+  source = "./modules/dynamodb"
+  name   = "invoice-records"
+  attributes = [
     {
-      workgroup_name      = "batch-workgroup"
-      base_capacity       = 128
-      publicly_accessible = true
-      subnet_ids          = module.public_subnets.subnets[*].id
-      security_group_ids  = [module.redshift_sg.id]
-      config_parameters = [
-        {
-          parameter_key   = "enable_user_activity_logging"
-          parameter_value = "true"
-        }
-      ]
+      name = "RecordId"
+      type = "S"
+    },
+    {
+      name = "filename"
+      type = "S"
     }
   ]
+  billing_mode          = "PAY_PER_REQUEST"
+  hash_key              = "RecordId"
+  range_key             = "filename"
+  ttl_attribute_name    = "TimeToExist"
+  ttl_attribute_enabled = true
+}
+
+# -----------------------------------------------------------------------------------------
+# Lambda Configuration
+# -----------------------------------------------------------------------------------------
+module "job_submit_function_iam_role" {
+  source             = "./modules/iam"
+  role_name          = "job-submet-function-iam-role"
+  role_description   = "IAM role for media metadata update lambda function"
+  policy_name        = "job-submet-function-iam-policy"
+  policy_description = "IAM policy for media metadata update lambda function"
+  assume_role_policy = <<EOF
+    {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Action": "sts:AssumeRole",
+                "Principal": {
+                  "Service": "lambda.amazonaws.com"
+                },
+                "Effect": "Allow",
+                "Sid": ""
+            }
+        ]
+    }
+    EOF
+  policy             = <<EOF
+    {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Action": [
+                  "logs:CreateLogGroup",
+                  "logs:CreateLogStream",
+                  "logs:PutLogEvents"
+                ],
+                "Resource": "arn:aws:logs:*:*:*",
+                "Effect": "Allow"
+            }            
+        ]
+    }
+    EOF
+}
+
+module "job_submit_function" {
+  source        = "./modules/lambda"
+  function_name = "watermark-job-submit"
+  role_arn      = module.job_submit_function_iam_role.arn
+  permissions   = []
+
+  vpc_config = {
+    security_group_ids = [module.lambda_sg.id]
+    subnet_ids         = module.vpc.private_subnets
+  }
+
+  dead_letter_config = {
+    target_arn = module.carshub_media_events_dlq.arn
+  }
+
+  env_variables = {
+    REGION = var.region
+  }
+
+  handler                 = "lambda.lambda_handler"
+  runtime                 = "python3.12"
+  s3_bucket               = module.job_submit_function_code.bucket
+  s3_key                  = "lambda.zip"
+  layers                  = [aws_lambda_layer_version.python_layer.arn]
+  code_signing_config_arn = module.job_submit_function_signing_profile.config_arn
+
+  tags = {
+    Name = "watermark-job-submit"
+  }
 }
 
 # -----------------------------------------------------------------------------------------
@@ -170,7 +309,7 @@ resource "aws_batch_compute_environment" "batch_compute" {
     max_vcpus = 16
 
     security_group_ids = [
-      module.security_group.id
+      module.batch_job_security_group.id
     ]
 
     subnets = module.public_subnets.subnets[*].id
