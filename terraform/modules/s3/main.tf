@@ -28,7 +28,9 @@ resource "aws_s3_bucket_versioning" "versioning" {
 
 # Bucket cors configuration
 resource "aws_s3_bucket_cors_configuration" "cors" {
+  count  = length(var.cors) > 0 ? 1 : 0
   bucket = aws_s3_bucket.bucket.id
+
   dynamic "cors_rule" {
     for_each = var.cors
     content {

@@ -11,8 +11,8 @@ import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
-# Ensure src is importable
-SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
+# Ensure src/batch-job is importable
+SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src", "batch-job"))
 sys.path.insert(0, SRC_DIR)
 
 # Mock boto3 dependencies when running locally without boto3 installed

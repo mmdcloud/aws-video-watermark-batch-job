@@ -6,7 +6,10 @@ variable "handler" {}
 variable "runtime" {}
 variable "s3_bucket" {}
 variable "s3_key" {}
-variable "code_signing_config_arn" {}
+variable "code_signing_config_arn" {
+  type = string
+  default = null
+}
 variable "layers" {
   type = list(string)
 }
