@@ -171,7 +171,7 @@ module "job_submit_function_code" {
       source = "./files/job_submit_function.zip"
     }
   ]
-  cors = []
+  cors               = []
   bucket_policy      = ""
   versioning_enabled = "Enabled"
   force_destroy      = true

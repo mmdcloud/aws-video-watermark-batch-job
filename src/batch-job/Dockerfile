@@ -38,8 +38,7 @@ WORKDIR /app
 
 # 3. Install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # 4. Copy application source files
 COPY --chown=appuser:appgroup main.py lambda.py ./
