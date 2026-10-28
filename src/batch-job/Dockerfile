@@ -36,9 +36,9 @@ RUN groupadd -g 10001 appgroup && \
 
 WORKDIR /app
 
-# 3. Install Python dependencies
+# 3. Install Python dependencies (with high timeout & retries for resilient downloads on slow networks)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --default-timeout=1000 --retries 10 --no-cache-dir -r requirements.txt
 
 # 4. Copy application source files
 COPY --chown=appuser:appgroup main.py lambda.py ./
