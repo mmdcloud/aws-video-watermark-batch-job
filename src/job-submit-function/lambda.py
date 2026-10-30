@@ -454,21 +454,50 @@ def submit_batch_job(
                 "DestinationBucket": output_bucket,
             },
         )
-    except (ClientError, BotoCoreError) as e:
-        logger.error(f"Failed to submit AWS Batch job '{job_name}': {e}")
-        # Record failure state in DynamoDB
-        record_job_state(
-            record_id=f"failed-{int(time.time())}",
-            filename=input_key,
-            status="FAILED",
-            job_name=job_name,
-            source_bucket=input_bucket,
-            destination_bucket=output_bucket,
-            destination_key=output_key,
-            media_type=media_type,
-            error_message=str(e),
-        )
-        raise
+    except Exception as e:
+        # If tagging fails due to missing batch:TagResource IAM permission, retry without tags
+        if "TagResource" in str(e):
+            logger.warning(
+                f"batch:TagResource permission not granted for '{job_name}'. Retrying submit_job without tags: {e}"
+            )
+            try:
+                response = batch_client.submit_job(
+                    jobName=job_name,
+                    jobQueue=JOB_QUEUE,
+                    jobDefinition=JOB_DEFINITION,
+                    containerOverrides=container_overrides,
+                    retryStrategy={"attempts": 2},
+                    timeout={"attemptDurationSeconds": timeout_seconds},
+                )
+            except Exception as retry_err:
+                logger.error(f"Failed to submit AWS Batch job '{job_name}' even without tags: {retry_err}")
+                record_job_state(
+                    record_id=f"failed-{int(time.time())}",
+                    filename=input_key,
+                    status="FAILED",
+                    job_name=job_name,
+                    source_bucket=input_bucket,
+                    destination_bucket=output_bucket,
+                    destination_key=output_key,
+                    media_type=media_type,
+                    error_message=str(retry_err),
+                )
+                raise
+        else:
+            logger.error(f"Failed to submit AWS Batch job '{job_name}': {e}")
+            # Record failure state in DynamoDB
+            record_job_state(
+                record_id=f"failed-{int(time.time())}",
+                filename=input_key,
+                status="FAILED",
+                job_name=job_name,
+                source_bucket=input_bucket,
+                destination_bucket=output_bucket,
+                destination_key=output_key,
+                media_type=media_type,
+                error_message=str(e),
+            )
+            raise
 
     job_id = response["jobId"]
     logger.info(f"Successfully submitted AWS Batch job: ID={job_id}, Name={job_name}")

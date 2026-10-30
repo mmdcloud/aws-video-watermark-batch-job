@@ -17,13 +17,29 @@ LAMBDA_DIR = os.path.abspath(
 )
 sys.path.insert(0, LAMBDA_DIR)
 
+class MockBotoCoreError(Exception):
+    pass
+
+
+class MockClientError(Exception):
+    def __init__(self, error_response=None, operation_name=None):
+        self.response = error_response or {}
+        self.operation_name = operation_name or ""
+        msg = f"An error occurred ({self.response.get('Error', {}).get('Code', 'Unknown')}) when calling the {self.operation_name} operation: {self.response.get('Error', {}).get('Message', '')}"
+        super().__init__(msg)
+
+
 # Mock boto3 before importing lambda module
+mock_exceptions = MagicMock()
+mock_exceptions.BotoCoreError = MockBotoCoreError
+mock_exceptions.ClientError = MockClientError
+
 with patch.dict(
     "sys.modules",
     {
         "boto3": MagicMock(),
         "botocore.config": MagicMock(),
-        "botocore.exceptions": MagicMock(),
+        "botocore.exceptions": mock_exceptions,
     },
 ):
     lambda_mod = importlib.import_module("lambda")
@@ -209,6 +225,31 @@ class TestJobSubmitLambda(unittest.TestCase):
         self.assertEqual(len(resp["submittedJobs"]), 1)
         # Verify ReportBatchItemFailures is returned
         self.assertIn("batchItemFailures", resp)
+
+    def test_tag_resource_access_denied_fallback(self):
+        # First call raises AccessDeniedException for TagResource, second call succeeds
+        access_denied = MockClientError(
+            {"Error": {"Code": "AccessDeniedException", "Message": "batch:TagResource not authorized"}},
+            "SubmitJob"
+        )
+        self.mock_batch.submit_job.side_effect = [
+            access_denied,
+            {"jobId": "batch-job-fallback-123", "jobName": "wm-fallback"}
+        ]
+
+        event = {
+            "input_bucket": "raw-media-bucket",
+            "input_key": "trailers/sample.mp4",
+            "output_bucket": "processed-media-bucket",
+        }
+
+        resp = lambda_mod.lambda_handler(event, None)
+        self.assertEqual(resp["statusCode"], 200)
+        self.assertEqual(resp["jobId"], "batch-job-fallback-123")
+        self.assertEqual(self.mock_batch.submit_job.call_count, 2)
+        # Verify second call was without tags
+        second_call_kwargs = self.mock_batch.submit_job.call_args_list[1][1]
+        self.assertNotIn("tags", second_call_kwargs)
 
 
 if __name__ == "__main__":

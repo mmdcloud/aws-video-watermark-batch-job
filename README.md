@@ -346,6 +346,12 @@ aws s3 ls s3://${DEST_BUCKET}/watermarked/uploads/
      ```
   2. Confirm `job-submit-function-iam-role` has `sqs:ReceiveMessage`, `sqs:DeleteMessage`, and `sqs:GetQueueAttributes` on `module.job_queue.arn`.
 
+### Issue: Lambda Fails with `batch:TagResource` AccessDeniedException
+* **Cause**: Submitting jobs with `tags={...}` requires the caller IAM role to have `batch:TagResource` on the job definition and job ARNs.
+* **Resolution**:
+  1. Ensure `batch:TagResource` is present in the `job-submit-function-iam-policy` under `BatchSubmitJob` in [`terraform/main.tf`](file:///home/shiv/mohit/aws-batch/terraform/main.tf).
+  2. The Lambda function automatically retries submitting the job without tags if `batch:TagResource` is denied, ensuring jobs are not dropped.
+
 ---
 
 ## Clean-Up / Teardown

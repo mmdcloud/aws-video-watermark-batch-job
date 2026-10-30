@@ -295,12 +295,14 @@ module "job_submit_function_iam_role" {
         Action = [
           "batch:SubmitJob",
           "batch:DescribeJobs",
-          "batch:TerminateJob"
+          "batch:TerminateJob",
+          "batch:TagResource"
         ]
         Resource = [
           aws_batch_job_queue.batch_job_queue.arn,
           aws_batch_job_definition.batch_job_definition.arn,
-          "${aws_batch_job_definition.batch_job_definition.arn}:*"
+          "arn:aws:batch:${var.region}:${data.aws_caller_identity.current.account_id}:job-definition/${aws_batch_job_definition.batch_job_definition.name}:*",
+          "arn:aws:batch:${var.region}:${data.aws_caller_identity.current.account_id}:job/*"
         ]
       },
       {
