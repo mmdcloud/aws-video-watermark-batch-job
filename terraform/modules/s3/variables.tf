@@ -38,16 +38,16 @@ variable "bucket_notification" {
   }
 }
 variable "block_public_acls" {
-  default = false
+  default = true
 }
 variable "block_public_policy" {
-  default = false
+  default = true
 }
 variable "ignore_public_acls" {
-  default = false
+  default = true
 }
 variable "restrict_public_buckets" {
-  default = false
+  default = true
 }
 variable "tags" {
   type = map(string)

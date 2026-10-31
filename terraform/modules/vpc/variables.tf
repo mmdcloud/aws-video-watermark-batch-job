@@ -10,6 +10,10 @@ variable "map_public_ip_on_launch" {}
 variable "enable_nat_gateway" {}
 variable "single_nat_gateway" {}
 variable "one_nat_gateway_per_az" {}
+variable "enable_s3_endpoint" {
+  type    = bool
+  default = true
+}
 variable "tags" {
   type    = map(string)
   default = {}

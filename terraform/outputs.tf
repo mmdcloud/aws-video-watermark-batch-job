@@ -21,6 +21,16 @@ output "sqs_queue_name" {
   description = "SQS queue buffering S3 notification events"
 }
 
+output "sqs_dlq_name" {
+  value       = module.job_queue.dlq_name
+  description = "SQS Dead Letter Queue buffering poison messages"
+}
+
+output "sqs_dlq_url" {
+  value       = module.job_queue.dlq_url
+  description = "URL of the SQS Dead Letter Queue"
+}
+
 output "dynamodb_table_name" {
   value       = module.job_metadata_state.name
   description = "DynamoDB table tracking media job state and metadata"

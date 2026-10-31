@@ -13,3 +13,7 @@ variable "scan_on_push" {
 variable "bash_command" {
   type = string
 }
+variable "triggers" {
+  type    = map(string)
+  default = {}
+}

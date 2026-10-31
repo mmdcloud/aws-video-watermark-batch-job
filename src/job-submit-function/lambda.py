@@ -73,7 +73,7 @@ JOB_DEFINITION = os.getenv("JOB_DEFINITION_ARN") or os.getenv(
     "BATCH_JOB_DEFINITION", "batch-job-definition"
 )
 DYNAMODB_TABLE_NAME = os.getenv("DYNAMODB_TABLE") or os.getenv(
-    "JOB_METADATA_TABLE", "invoice-records"
+    "JOB_METADATA_TABLE", "media-watermark-records"
 )
 DESTINATION_BUCKET = os.getenv("DESTINATION_BUCKET", "")
 DEFAULT_WATERMARK_TEXT = os.getenv("DEFAULT_WATERMARK_TEXT", "CONFIDENTIAL")
@@ -276,6 +276,124 @@ def record_job_state(
             f"Unexpected error updating DynamoDB state (RecordId={record_id}): {e}"
         )
         return False
+
+
+def update_job_status_by_id(
+    job_id: str,
+    status: str,
+    status_reason: str = "",
+    exit_code: Optional[int] = None,
+    stopped_at: Optional[int] = None,
+) -> bool:
+    """
+    Updates the execution status of an AWS Batch job in DynamoDB when notified
+    via EventBridge (e.g. SUCCEEDED -> COMPLETED, FAILED -> FAILED).
+    """
+    table = get_dynamodb_table()
+    if not table:
+        return False
+
+    try:
+        resp = table.query(
+            KeyConditionExpression="RecordId = :rid",
+            ExpressionAttributeValues={":rid": job_id},
+            Limit=1,
+        )
+        items = resp.get("Items", [])
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        if not items:
+            logger.warning(
+                f"No existing DynamoDB record found for RecordId={job_id}. Creating status record."
+            )
+            table.put_item(
+                Item={
+                    "RecordId": job_id,
+                    "filename": "UNKNOWN",
+                    "status": status,
+                    "status_reason": status_reason,
+                    "exit_code": exit_code,
+                    "updated_at": now_iso,
+                    "TimeToExist": int(time.time()) + (TTL_RETENTION_DAYS * 86400),
+                }
+            )
+            return True
+
+        filename = items[0]["filename"]
+        update_expr = "SET #s = :status, updated_at = :now, status_reason = :reason"
+        expr_attr_names = {"#s": "status"}
+        expr_attr_values = {
+            ":status": status,
+            ":now": now_iso,
+            ":reason": status_reason,
+        }
+
+        if exit_code is not None:
+            update_expr += ", exit_code = :exit_code"
+            expr_attr_values[":exit_code"] = exit_code
+
+        if stopped_at:
+            update_expr += ", completed_at = :stopped_at"
+            expr_attr_values[":stopped_at"] = stopped_at
+
+        table.update_item(
+            Key={"RecordId": job_id, "filename": filename},
+            UpdateExpression=update_expr,
+            ExpressionAttributeNames=expr_attr_names,
+            ExpressionAttributeValues=expr_attr_values,
+        )
+        logger.info(
+            f"Successfully updated DynamoDB state [RecordId={job_id}, filename={filename}, status={status}]"
+        )
+        return True
+    except Exception as e:
+        logger.error(
+            f"Failed to update DynamoDB completion state for JobId={job_id}: {e}"
+        )
+        return False
+
+
+def handle_batch_state_change(event: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Processes EventBridge AWS Batch Job State Change events.
+    """
+    detail = event.get("detail", {})
+    job_id = detail.get("jobId")
+    batch_status = detail.get("status")
+    status_reason = detail.get("statusReason", "")
+    container = detail.get("container", {})
+    exit_code = container.get("exitCode")
+    stopped_at = detail.get("stoppedAt")
+
+    logger.info(
+        f"Processing EventBridge Batch Job State Change: JobId={job_id}, Status={batch_status}, Reason={status_reason}"
+    )
+
+    if not job_id or not batch_status:
+        logger.warning("EventBridge event missing jobId or status.")
+        return {"statusCode": 400, "message": "Missing jobId or status"}
+
+    # Map Batch status to final pipeline status
+    mapped_status = (
+        "COMPLETED"
+        if batch_status == "SUCCEEDED"
+        else ("FAILED" if batch_status == "FAILED" else batch_status)
+    )
+
+    success = update_job_status_by_id(
+        job_id=job_id,
+        status=mapped_status,
+        status_reason=status_reason,
+        exit_code=exit_code,
+        stopped_at=stopped_at,
+    )
+
+    return {
+        "statusCode": 200 if success else 500,
+        "jobId": job_id,
+        "status": mapped_status,
+        "updated": success,
+    }
 
 
 # ==============================================================================
@@ -534,16 +652,24 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """
     AWS Lambda Function Entrypoint.
     Handles:
-      1. SQS messages (containing S3 upload events) with ReportBatchItemFailures
-      2. Direct S3 event notifications
-      3. Direct JSON invocation payloads
+      1. EventBridge AWS Batch Job State Change events (SUCCEEDED / FAILED)
+      2. SQS messages (containing S3 upload events) with ReportBatchItemFailures
+      3. Direct S3 event notifications
+      4. Direct JSON invocation payloads
     """
     logger.info(f"Received invocation event: {json.dumps(event)[:600]}")
+
+    # Scenario A: EventBridge AWS Batch Job State Change Event
+    if (
+        event.get("source") == "aws.batch"
+        and event.get("detail-type") == "Batch Job State Change"
+    ):
+        return handle_batch_state_change(event)
 
     batch_item_failures: List[Dict[str, str]] = []
     processed_jobs: List[Dict[str, Any]] = []
 
-    # Scenario A: Event-driven Records (SQS or S3)
+    # Scenario B: Event-driven Records (SQS or S3)
     if "Records" in event and isinstance(event["Records"], list):
         for record in event["Records"]:
             message_id = record.get("messageId", "direct_s3_record")

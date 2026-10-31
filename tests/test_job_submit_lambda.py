@@ -251,6 +251,40 @@ class TestJobSubmitLambda(unittest.TestCase):
         second_call_kwargs = self.mock_batch.submit_job.call_args_list[1][1]
         self.assertNotIn("tags", second_call_kwargs)
 
+    def test_eventbridge_batch_state_change_succeeded(self):
+        self.mock_table.query.return_value = {
+            "Items": [
+                {
+                    "RecordId": "batch-job-123",
+                    "filename": "videos/sample.mp4",
+                    "status": "SUBMITTED",
+                }
+            ]
+        }
+
+        event = {
+            "source": "aws.batch",
+            "detail-type": "Batch Job State Change",
+            "detail": {
+                "jobId": "batch-job-123",
+                "status": "SUCCEEDED",
+                "statusReason": "Essential container in task exited successfully",
+                "stoppedAt": 1793346800000,
+                "container": {
+                    "exitCode": 0,
+                },
+            },
+        }
+
+        resp = lambda_mod.lambda_handler(event, None)
+        self.assertEqual(resp["statusCode"], 200)
+        self.assertEqual(resp["status"], "COMPLETED")
+        self.assertTrue(resp["updated"])
+        self.mock_table.update_item.assert_called_once()
+        update_args = self.mock_table.update_item.call_args[1]
+        self.assertEqual(update_args["Key"], {"RecordId": "batch-job-123", "filename": "videos/sample.mp4"})
+        self.assertEqual(update_args["ExpressionAttributeValues"][":status"], "COMPLETED")
+
 
 if __name__ == "__main__":
     unittest.main()

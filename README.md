@@ -21,34 +21,35 @@ A production-grade, event-driven serverless media processing pipeline deployed v
   ─────────────────► [ S3 Source Bucket ] ──────────┐                              │
                             (Versioning)            │                              │
                                                     ▼                              │
-                                            [ Amazon SQS ]                         │
-                                             (job-queue)                           │
+                                            [ Amazon SQS ] ──► [ SQS DLQ ]         │
+                                             (job-queue)       (Poison Buffer)     │
                                                     │                              │
                                                     │ 3. Event Source Mapping      │
                                                     │    (Batch Size: 10)          │
                                                     ▼                              │
-                                            [ AWS Lambda ]                         │
-                                        (watermark-job-submit)                     │
-                                                    │                              │
-                                    ┌───────────────┴──────────────┐               │
-                                    │ 4. Track State               │ 5. Submit Job │
-                                    ▼                              ▼               │
-                         [ Amazon DynamoDB ]              [ AWS Batch Queue ]      │
-                          (invoice-records)               (batch-job-queue)        │
-                           - Hash: RecordId                        │               │
-                           - Range: filename                       ▼               │
-                           - TTL: TimeToExist             [ AWS Batch Compute ]    │
-                                                        (Fargate - Auto Scaled)    │
-                                                                   │               │
-                                                                   ▼               │
-                                                          [ Fargate Task ]         │
-                                                          - ECR Container Image    │
-                                                          - S3 Multipart Download  │
-                                                          - FFmpeg Transcoding     │
-                                                          - S3 Multipart Upload    │
-                                                                   │               │
-                                    6. Deliver Output              ▼               │
-                                 ◄───────────────────── [ S3 Destination Bucket ]  │
+                                            [ AWS Lambda ] ◄───────────────────┐   │
+                                        (watermark-job-submit)                 │   │
+                                                    │                          │   │
+                                    ┌───────────────┴──────────────┐           │   │
+                                    │ 4. Track State               │ 5. Submit │   │
+                                    ▼                              ▼           │   │
+                         [ Amazon DynamoDB ]              [ AWS Batch Queue ]  │   │
+                      (media-watermark-records)           (batch-job-queue)    │   │
+                           - Hash: RecordId                        │           │   │
+                           - Range: filename                       ▼           │   │
+                           - TTL: TimeToExist             [ AWS Batch Compute ]│   │
+                           - PITR & SSE Enabled           (Private Fargate)    │   │
+                                  ▲                                │           │   │
+                                  │                                ▼           │   │
+                                  │                       [ Fargate Task ]     │   │
+                                  │                       - Private Subnets    │   │
+                                  │                       - S3 VPC Gateway     │   │
+                                  │                       - FFmpeg Transcode   │   │
+                                  │                       - 50 GiB Ephemeral   │   │
+                                  │                                │           │   │
+                                  │ 7. State Change Event          │ 6. Upload │   │
+                                  │    (COMPLETED / FAILED)        ▼           │   │
+                                  └──────── [ Amazon EventBridge ] ─── [ S3 Dest ] │
                                                                                    │
                           └────────────────────────────────────────────────────────┘
 ```
@@ -120,32 +121,39 @@ A production-grade, event-driven serverless media processing pipeline deployed v
 ### 1. Networking & VPC
 * **CIDR Block**: `10.0.0.0/16` across 3 Availability Zones (`us-east-1a`, `us-east-1b`, `us-east-1c`).
 * **Subnets**: 3 public subnets (`10.0.1.0/24`, `10.0.2.0/24`, `10.0.3.0/24`) and 3 private subnets (`10.0.4.0/24`, `10.0.5.0/24`, `10.0.6.0/24`).
-* **Internet Connectivity**: Internet Gateway for public subnets; Single NAT Gateway (`enable_nat_gateway = true`) providing secure egress for Lambda functions placed in private subnets.
+* **Internet Connectivity & S3 Routing**:
+  * Internet Gateway for public egress.
+  * Single NAT Gateway providing egress for Lambda and container image pulls.
+  * **S3 Gateway VPC Endpoint**: Zero-cost, high-speed internal AWS network routing for S3 multipart streaming, bypassing NAT Gateway bandwidth fees.
 * **Security Groups**:
-  * `batch-job-security-group`: Outbound all traffic (`-1` to `0.0.0.0/0`) for Fargate container orchestration and S3 HTTPS transfers.
+  * `batch-job-security-group`: Zero inbound rules (`ingress_rules = []`); outbound all traffic (`-1` to `0.0.0.0/0`) for S3 and ECR communications.
   * `lambda-sg`: Outbound HTTPS (`tcp/443` to `0.0.0.0/0`) for secure communication with AWS service endpoints.
 
 ### 2. Storage & Queuing
 * **Amazon S3**:
-  * Source Media Bucket: `source-bucket-${region}-${account_id}` with Versioning enabled and S3 bucket notifications triggering SQS.
-  * Destination Media Bucket: `destination-bucket-${region}-${account_id}` with Versioning enabled.
-  * Lambda Code Bucket: `job-submit-code-${region}-${account_id}`.
+  * Source Media Bucket: `source-bucket-${region}-${account_id}` with Versioning, Public Access Block, and S3 bucket notifications triggering SQS.
+  * Destination Media Bucket: `destination-bucket-${region}-${account_id}` with Versioning, Public Access Block, and Lifecycle rule aborting incomplete multipart uploads after 7 days.
+  * Lambda Code Bucket: `job-submit-code-${region}-${account_id}` with MD5 tracking preventing deployment drift.
 * **Amazon SQS**:
   * Main Queue: `job-queue` (Max message size: 256 KB, retention: 4 days, visibility timeout: 180s).
+  * Dead Letter Queue: `job-queue-dlq` with `maxReceiveCount = 3` and 14-day retention for unprocessable poison messages.
   * Policy: Explicit `sqs:SendMessage` authorized strictly for `s3.amazonaws.com` restricted by `aws:SourceArn`.
 
 ### 3. State Management & Compute
 * **Amazon DynamoDB**:
-  * Table: `invoice-records`
+  * Table: `media-watermark-records`
   * Billing Mode: `PAY_PER_REQUEST` (On-Demand auto-scaling)
   * Partition Key: `RecordId` (String - AWS Batch Job ID or UUID)
   * Sort Key: `filename` (String - Source S3 object key)
-  * TTL: Enabled on `TimeToExist` (automated deletion after retention expires)
+  * Protection: Server-Side Encryption (SSE) and Point-In-Time Recovery (PITR) enabled.
+  * TTL: Enabled on `TimeToExist` (automated deletion after retention expires).
 * **AWS Lambda**:
   * Function Name: `watermark-job-submit`
-  * Runtime: `python3.12` | Memory: 256 MB | Timeout: 30s
+  * Runtime: `python3.12` | Memory: 256 MB | Timeout: 30s | Tracked via `source_code_hash`.
+  * Triggers: SQS Event Source Mapping and EventBridge Batch Job State Change events.
 * **AWS Batch & Fargate**:
-  * Compute Environment: Managed Fargate environment scaling up to 16 vCPUs.
+  * Compute Environment: Managed Fargate environment scaling up to 16 vCPUs hosted in **private subnets** with `assignPublicIp = "DISABLED"`.
+  * Ephemeral Storage: **50 GiB** disk space allocated per task to accommodate high-bitrate 4K media transcoding.
   * Job Queue: `batch-job-queue` (Priority 1).
   * Job Definition: `batch-job-definition` (Default allocation: **2.0 vCPU** / **4096 MiB RAM**; overridable per media type).
 
@@ -298,7 +306,7 @@ Inspect the state stored in DynamoDB:
 
 ```bash
 aws dynamodb scan \
-  --table-name invoice-records \
+  --table-name media-watermark-records \
   --query "Items[*].{RecordId:RecordId.S, filename:filename.S, status:status.S, updated_at:updated_at.S}" \
   --output table
 ```

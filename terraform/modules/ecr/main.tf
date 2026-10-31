@@ -12,7 +12,11 @@ resource "aws_ecr_repository" "repository" {
 }
 
 resource "null_resource" "push_image_to_ecr" {
+  triggers = var.triggers
+
   provisioner "local-exec" {
     command = var.bash_command
   }
+
+  depends_on = [aws_ecr_repository.repository]
 }

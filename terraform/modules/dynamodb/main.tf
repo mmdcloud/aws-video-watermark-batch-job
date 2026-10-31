@@ -19,6 +19,14 @@ resource "aws_dynamodb_table" "mediaconvert-records" {
     enabled        = var.ttl_attribute_enabled
   }
 
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
   tags = {
     Name = var.name
   }

@@ -42,3 +42,7 @@ variable "dead_letter_config" {
   })
   default = null 
 }
+variable "source_code_hash" {
+  type    = string
+  default = null
+}

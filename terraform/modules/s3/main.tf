@@ -16,6 +16,32 @@ resource "aws_s3_object" "object" {
   bucket = aws_s3_bucket.bucket.id
   source = var.objects[count.index].source
   key    = var.objects[count.index].key
+  etag   = filemd5(var.objects[count.index].source)
+}
+
+# Bucket server-side encryption
+resource "aws_s3_bucket_server_side_encryption_configuration" "sse" {
+  bucket = aws_s3_bucket.bucket.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+# Bucket lifecycle configuration (aborts incomplete multipart uploads)
+resource "aws_s3_bucket_lifecycle_configuration" "lifecycle" {
+  bucket = aws_s3_bucket.bucket.id
+
+  rule {
+    id     = "abort-incomplete-multipart-upload"
+    status = "Enabled"
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
 }
 
 # Bucket versioning configuration
