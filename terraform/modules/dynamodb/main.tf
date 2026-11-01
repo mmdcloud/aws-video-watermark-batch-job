@@ -20,7 +20,7 @@ resource "aws_dynamodb_table" "mediaconvert-records" {
   }
 
   point_in_time_recovery {
-    enabled = true
+    enabled = var.pitr_enabled
   }
 
   server_side_encryption {

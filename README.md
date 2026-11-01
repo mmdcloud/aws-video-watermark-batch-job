@@ -5,7 +5,7 @@
 [![Docker](https://img.shields.io/badge/Docker-Fargate_Ready-2496ED.svg?logo=docker)](https://www.docker.com/)
 [![FFmpeg](https://img.shields.io/badge/FFmpeg-6.1+-007808.svg?logo=ffmpeg)](https://ffmpeg.org/)
 [![AWS](https://img.shields.io/badge/AWS-Batch_%7C_Lambda_%7C_DynamoDB_%7C_SQS_%7C_S3-FF9900.svg?logo=amazon-aws)](https://aws.amazon.com/)
-[![Tests](https://img.shields.io/badge/Tests-16%2F16_Passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-18%2F18_Passing-brightgreen.svg)](tests/)
 
 A production-grade, event-driven serverless media processing pipeline deployed via Terraform. The architecture ingests video and image uploads via Amazon S3, buffers ingestion traffic through Amazon SQS, triggers an AWS Lambda orchestrator to record state in Amazon DynamoDB, and dispatches containerized transcode jobs to AWS Batch on AWS Fargate executing FFmpeg.
 
@@ -229,14 +229,28 @@ terraform apply tfplan
 
 ## Configuration & Parameters Reference
 
-### Root Terraform Variables (`terraform/variables.tf`)
+### Root Terraform Variables (`terraform/variables.tf` & `terraform/terraform.tfvars`)
 
 | Variable | Type | Default | Description |
 | :--- | :---: | :---: | :--- |
+| `project_name` | `string` | `"media-watermark"` | Base name prefix for all provisioned resources |
+| `environment` | `string` | `"prod"` | Target deployment environment (`prod`, `staging`, `dev`) |
 | `region` | `string` | `"us-east-1"` | AWS Region for resource deployment |
-| `azs` | `list(string)` | `["us-east-1a", "us-east-1b", "us-east-1c"]` | Availability Zones for VPC subnets |
-| `public_subnets` | `list(string)` | `["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]` | Public Subnet CIDRs (Batch Fargate) |
-| `private_subnets` | `list(string)` | `["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]` | Private Subnet CIDRs (Lambda ENIs) |
+| `vpc_cidr` | `string` | `"10.0.0.0/16"` | CIDR block for the dedicated VPC |
+| `enable_s3_endpoint` | `bool` | `true` | S3 Gateway VPC Endpoint to avoid NAT data charges |
+| `single_nat_gateway` | `bool` | `true` | Single NAT Gateway across AZs for cost optimization |
+| `s3_force_destroy` | `bool` | `false` | Prevent accidental S3 bucket deletion in production |
+| `sqs_max_receive_count` | `number` | `3` | Max delivery attempts before routing to Dead Letter Queue |
+| `sqs_dlq_retention_seconds` | `number` | `1209600` | Retention for poison messages in DLQ (14 days) |
+| `dynamodb_table_name` | `string` | `"media-watermark-records"` | DynamoDB table for job state tracking |
+| `dynamodb_pitr_enabled` | `bool` | `true` | Point-In-Time Recovery automated backups |
+| `lambda_timeout` | `number` | `30` | Lambda execution timeout in seconds |
+| `lambda_memory_size` | `number` | `256` | Lambda memory allocation in MB |
+| `batch_max_vcpus` | `number` | `16` | Maximum vCPUs for Batch compute auto-scaling |
+| `batch_default_vcpu` | `string` | `"2.0"` | Default vCPU allocated per Batch task |
+| `batch_default_memory` | `string` | `"4096"` | Default memory (MiB) allocated per Batch task |
+| `batch_ephemeral_storage_gb` | `number` | `50` | Ephemeral disk space (GiB) for Fargate transcode tasks |
+| `enable_alarms` | `bool` | `true` | Provision CloudWatch alarms for SQS DLQ & Lambda errors |
 
 ### Lambda Environment Variables
 
@@ -245,9 +259,9 @@ terraform apply tfplan
 | `REGION` | AWS Region | `var.region` |
 | `JOB_QUEUE_ARN` | Target AWS Batch Job Queue ARN | `aws_batch_job_queue.batch_job_queue.arn` |
 | `JOB_DEFINITION_ARN` | Target AWS Batch Job Definition ARN | `aws_batch_job_definition.batch_job_definition.arn` |
-| `DYNAMODB_TABLE` | State Tracking Table | `module.job_metadata_state.name` (`invoice-records`) |
+| `DYNAMODB_TABLE` | State Tracking Table | `module.job_metadata_state.name` (`media-watermark-records`) |
 | `DESTINATION_BUCKET` | Target S3 Bucket for Watermarked Output | `module.destination_bucket.bucket` |
-| `DEFAULT_WATERMARK_TEXT` | Fallback watermark string | `"CONFIDENTIAL"` |
+| `DEFAULT_WATERMARK_TEXT` | Fallback watermark string | `var.default_watermark_text` (`"CONFIDENTIAL"`) |
 
 ### Batch Container CLI & Environment Options (`src/batch-job/main.py`)
 
@@ -283,7 +297,7 @@ python3 -m unittest discover tests -v
 
 Expected result:
 ```text
-Ran 16 tests in 0.015s
+Ran 18 tests in 0.015s
 OK
 ```
 
@@ -326,6 +340,101 @@ Confirm the watermarked output is delivered to the destination bucket:
 ```bash
 aws s3 ls s3://${DEST_BUCKET}/watermarked/uploads/
 ```
+
+---
+
+## Live Deployment & Pipeline Walkthrough
+
+The following walkthrough demonstrates the end-to-end execution of the media watermarking pipeline across the AWS Console and terminal, verified in `us-east-1` (Account `344626620590`).
+
+### 1. Terraform Apply & Infrastructure Provisioning
+Provisioning 74 managed cloud resources across networking, storage, compute, and security with zero configuration drift:
+
+![Terraform Apply Output](screenshots/Screenshot%20from%202026-11-01%2010-16-38.png)
+
+* **Key Observations**:
+  * `Apply complete! Resources: 74 added, 0 changed, 0 destroyed.`
+  * Successfully exports all deployment ARNs, SQS queue URLs, ECR repository URLs, and S3 bucket identifiers.
+
+---
+
+### 2. Multi-Bucket Storage Architecture (Amazon S3)
+Three isolated S3 buckets provisioned with versioning, public access blocks, and server-side encryption:
+
+![Amazon S3 Buckets](screenshots/Screenshot%20from%202026-11-01%2010-18-00.png)
+
+* **Key Observations**:
+  * `source-bucket-us-east-1-344626620590`: Primary ingestion bucket configured with S3 Event Notifications to SQS.
+  * `destination-bucket-us-east-1-344626620590`: Target bucket for processed media with automated multipart abort lifecycle rules.
+  * `job-submit-code-us-east-1-344626620590`: Dedicated artifact bucket storing versioned Lambda function deployment packages.
+
+---
+
+### 3. Media Ingestion & Event Notification Trigger
+Uploading a high-definition video file to the source S3 bucket triggers the automated serverless pipeline:
+
+![S3 Upload Ingestion](screenshots/Screenshot%20from%202026-11-01%2010-19-50.png)
+
+* **Key Observations**:
+  * `SampleVideo_1280x720_5mb.mp4` (5.0 MB) uploaded directly to `s3://source-bucket-us-east-1-344626620590`.
+  * S3 immediately fires an `s3:ObjectCreated:Put` event notification buffered into the Amazon SQS `job-queue`.
+
+---
+
+### 4. Managed Serverless Compute Environment (AWS Batch & Fargate)
+The dedicated AWS Batch compute environment running on AWS Fargate:
+
+![AWS Batch Compute Environment](screenshots/Screenshot%20from%202026-11-01%2010-21-20.png)
+
+* **Key Observations**:
+  * Compute Environment: `media-watermark-batch-compute`.
+  * Provisioning Model: Serverless Fargate in private VPC subnets with `assignPublicIp = "DISABLED"`.
+  * Status: `Valid` | State: `Enabled` | Max Capacity: 16 vCPUs auto-scaling.
+
+---
+
+### 5. Job Queue & Dynamic Job Orchestration
+The AWS Batch job queue receiving dispatched tasks from the Lambda orchestrator:
+
+![AWS Batch Job Queue Overview](screenshots/Screenshot%20from%202026-11-01%2010-20-31.png)
+
+* **Key Observations**:
+  * Job Queue: `batch-job-queue` (Priority 1) linked to the Fargate compute environment.
+  * Live status transitions from `Starting` -> `Running` -> `Succeeded: 1` with 0 failures.
+
+---
+
+### 6. Transcoding Telemetry & Execution (Amazon CloudWatch Logs)
+Detailed execution telemetry streamed in real time from the containerized FFmpeg transcode task:
+
+![CloudWatch Logs FFmpeg Transcoding](screenshots/Screenshot%20from%202026-11-01%2010-24-03.png)
+
+* **Key Observations**:
+  * Real-time FFmpeg encoding frames: `frame= 739 fps= 26 q=-1.0 size= 4817kB time=00:00:29.56 bitrate=1334.7kbits/s speed=1.05x`.
+  * Multipart S3 streaming upload: `Transfer 'SampleVideo_1280x720_5mb.mp4': 100.0% (4.7/4.7 MB)`.
+  * Clean task completion: `=== AWS Batch Watermark Processing Completed Successfully ===`.
+
+---
+
+### 7. Processed Media Delivery (Destination S3 Bucket)
+The final watermarked media delivered to the destination S3 bucket:
+
+![S3 Destination Bucket Delivery](screenshots/Screenshot%20from%202026-11-01%2010-23-10.png)
+
+* **Key Observations**:
+  * Processed asset delivered to `s3://destination-bucket-us-east-1-344626620590/watermarked/SampleVideo_1280x720_5mb.mp4`.
+  * Encoded size: `4.7 MB` with optimized H.264 stream and `+faststart` metadata for instant web streaming.
+
+---
+
+### 8. Rendered Watermark Output Verification
+Playback verification of the output video with the burned-in watermark overlay:
+
+![Watermarked Video Playback](screenshots/Screenshot%20from%202026-11-01%2010-25-59.png)
+
+* **Key Observations**:
+  * High-contrast `"CONFIDENTIAL"` watermark burned cleanly into the bottom-right corner with semi-transparent bounding box.
+  * Original 720p video stream and AAC audio preserved with optimal quality.
 
 ---
 

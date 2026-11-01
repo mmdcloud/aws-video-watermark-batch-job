@@ -7,6 +7,8 @@ resource "aws_lambda_function" "function" {
   s3_bucket        = var.s3_bucket
   s3_key           = var.s3_key
   source_code_hash = var.source_code_hash
+  timeout          = var.timeout
+  memory_size      = var.memory_size
   dynamic "dead_letter_config" {
     for_each = var.dead_letter_config == null ? [] : [var.dead_letter_config]
     content {

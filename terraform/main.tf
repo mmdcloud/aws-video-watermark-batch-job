@@ -1,24 +1,28 @@
+# ==============================================================================
+# Production AWS Batch Media Watermarking Pipeline: Root Configuration
+# ==============================================================================
+
 data "aws_caller_identity" "current" {}
 
-# -----------------------------------------------------------------------------------------
-# IAM role for batch 
-# -----------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# 1. IAM Service Role for AWS Batch
+# ------------------------------------------------------------------------------
 data "aws_iam_policy_document" "batch_assume_role" {
   statement {
-    effect = "Allow"
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
 
     principals {
       type        = "Service"
       identifiers = ["batch.amazonaws.com"]
     }
-
-    actions = ["sts:AssumeRole"]
   }
 }
 
 resource "aws_iam_role" "aws_batch_service_role" {
-  name               = "aws-batch-service-role"
+  name               = "${var.project_name}-batch-service-role"
   assume_role_policy = data.aws_iam_policy_document.batch_assume_role.json
+  tags               = var.tags
 }
 
 resource "aws_iam_role_policy_attachment" "aws_batch_service_role" {
@@ -26,13 +30,13 @@ resource "aws_iam_role_policy_attachment" "aws_batch_service_role" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSBatchServiceRole"
 }
 
-# -----------------------------------------------------------------------------------------
-# VPC Configuration
-# -----------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# 2. VPC & Networking Configuration
+# ------------------------------------------------------------------------------
 module "vpc" {
   source                  = "./modules/vpc"
-  vpc_name                = "vpc"
-  vpc_cidr                = "10.0.0.0/16"
+  vpc_name                = var.vpc_name
+  vpc_cidr                = var.vpc_cidr
   azs                     = var.azs
   public_subnets          = var.public_subnets
   private_subnets         = var.private_subnets
@@ -40,19 +44,17 @@ module "vpc" {
   enable_dns_support      = true
   create_igw              = true
   map_public_ip_on_launch = true
-  enable_nat_gateway      = true
-  single_nat_gateway      = true
+  enable_nat_gateway      = var.enable_nat_gateway
+  single_nat_gateway      = var.single_nat_gateway
   one_nat_gateway_per_az  = false
-  enable_s3_endpoint      = true
-  tags = {
-    Project = "media-watermark-batch"
-  }
+  enable_s3_endpoint      = var.enable_s3_endpoint
+  tags                    = var.tags
 }
 
-# Security Group
+# Security Groups
 module "batch_job_security_group" {
   source        = "./modules/security-groups"
-  name          = "batch-job-security-group"
+  name          = "${var.project_name}-batch-sg"
   vpc_id        = module.vpc.vpc_id
   ingress_rules = [] # Batch tasks only require outbound connectivity to S3, ECR, and CloudWatch
   egress_rules = [
@@ -64,21 +66,17 @@ module "batch_job_security_group" {
       cidr_blocks = ["0.0.0.0/0"]
     }
   ]
-  tags = {
-    Name = "batch-job-security-group"
-  }
+  tags = var.tags
 }
 
 module "lambda_sg" {
-  source = "./modules/security-groups"
-  name   = "lambda-sg"
-  vpc_id = module.vpc.vpc_id
-
+  source        = "./modules/security-groups"
+  name          = "${var.project_name}-lambda-sg"
+  vpc_id        = module.vpc.vpc_id
   ingress_rules = []
-
   egress_rules = [
     {
-      description     = "HTTPS to VPC endpoints and internet"
+      description     = "HTTPS to VPC endpoints and AWS service APIs"
       from_port       = 443
       to_port         = 443
       protocol        = "tcp"
@@ -86,22 +84,19 @@ module "lambda_sg" {
       security_groups = []
     }
   ]
-
-  tags = {
-    Name = "lambda-sg"
-  }
+  tags = var.tags
 }
 
-# -----------------------------------------------------------------------------------------
-# ECR Configuration
-# -----------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# 3. Amazon ECR Repository & Build Pipeline
+# ------------------------------------------------------------------------------
 module "ecr" {
   source               = "./modules/ecr"
+  name                 = var.ecr_repository_name
   force_delete         = true
-  scan_on_push         = true
-  image_tag_mutability = "MUTABLE"
+  scan_on_push         = var.ecr_scan_on_push
+  image_tag_mutability = var.ecr_image_tag_mutability
   bash_command         = "bash ${path.module}/../src/batch-job/artifact_push.sh ${var.region}"
-  name                 = "batch_job"
   triggers = {
     dockerfile_hash = filemd5("${path.module}/../src/batch-job/Dockerfile")
     main_py_hash    = filemd5("${path.module}/../src/batch-job/main.py")
@@ -109,24 +104,24 @@ module "ecr" {
   }
 }
 
-# -----------------------------------------------------------------------------------------
-# S3 Configuration
-# -----------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# 4. Amazon S3 Storage Buckets
+# ------------------------------------------------------------------------------
 module "source_bucket" {
   source             = "./modules/s3"
-  bucket_name        = "source-bucket-${var.region}-${data.aws_caller_identity.current.account_id}"
+  bucket_name        = "${var.source_bucket_prefix}-${var.region}-${data.aws_caller_identity.current.account_id}"
   objects            = []
-  versioning_enabled = "Enabled"
+  versioning_enabled = var.s3_versioning_enabled
   cors = [
     {
       allowed_headers = ["*"]
       allowed_methods = ["PUT"]
       allowed_origins = ["*"]
-      max_age_seconds = 3000
+      max_age_seconds = var.s3_cors_max_age_seconds
     }
   ]
   bucket_policy = ""
-  force_destroy = false
+  force_destroy = var.s3_force_destroy
   bucket_notification = {
     queue = [
       {
@@ -136,32 +131,34 @@ module "source_bucket" {
     ]
     lambda_function = []
   }
+  tags = var.tags
 }
 
 module "destination_bucket" {
   source             = "./modules/s3"
-  bucket_name        = "destination-bucket-${var.region}-${data.aws_caller_identity.current.account_id}"
+  bucket_name        = "${var.destination_bucket_prefix}-${var.region}-${data.aws_caller_identity.current.account_id}"
   objects            = []
-  versioning_enabled = "Enabled"
+  versioning_enabled = var.s3_versioning_enabled
   cors = [
     {
       allowed_headers = ["*"]
       allowed_methods = ["PUT"]
       allowed_origins = ["*"]
-      max_age_seconds = 3000
+      max_age_seconds = var.s3_cors_max_age_seconds
     }
   ]
   bucket_policy = ""
-  force_destroy = false
+  force_destroy = var.s3_force_destroy
   bucket_notification = {
     queue           = []
     lambda_function = []
   }
+  tags = var.tags
 }
 
 module "job_submit_function_code" {
   source      = "./modules/s3"
-  bucket_name = "job-submit-code-${var.region}-${data.aws_caller_identity.current.account_id}"
+  bucket_name = "${var.lambda_code_bucket_prefix}-${var.region}-${data.aws_caller_identity.current.account_id}"
   objects = [
     {
       key    = "job_submit_function.zip"
@@ -170,25 +167,24 @@ module "job_submit_function_code" {
   ]
   cors               = []
   bucket_policy      = ""
-  versioning_enabled = "Enabled"
+  versioning_enabled = var.s3_versioning_enabled
   force_destroy      = true
-  tags = {
-    Name = "job-submit-function-code"
-  }
+  tags               = var.tags
 }
 
-# -----------------------------------------------------------------------------------------
-# SQS Configuration
-# -----------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# 5. Amazon SQS Queuing (Main Queue + DLQ)
+# ------------------------------------------------------------------------------
 module "job_queue" {
-  source                     = "./modules/sqs"
-  queue_name                 = "job-queue"
-  delay_seconds              = 0
-  maxReceiveCount            = 3
-  max_message_size           = 262144
-  message_retention_seconds  = 345600
-  visibility_timeout_seconds = 180
-  receive_wait_time_seconds  = 20
+  source                        = "./modules/sqs"
+  queue_name                    = var.sqs_queue_name
+  delay_seconds                 = 0
+  maxReceiveCount               = var.sqs_max_receive_count
+  dlq_message_retention_seconds = var.sqs_dlq_retention_seconds
+  max_message_size              = var.sqs_max_message_size
+  message_retention_seconds     = var.sqs_message_retention_seconds
+  visibility_timeout_seconds    = var.sqs_visibility_timeout_seconds
+  receive_wait_time_seconds     = var.sqs_receive_wait_time_seconds
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -197,7 +193,7 @@ module "job_queue" {
         Effect    = "Allow"
         Principal = { Service = "s3.amazonaws.com" }
         Action    = "sqs:SendMessage"
-        Resource  = "arn:aws:sqs:${var.region}:*:job-queue"
+        Resource  = "arn:aws:sqs:${var.region}:*:${var.sqs_queue_name}"
         Condition = {
           ArnEquals = {
             "aws:SourceArn" = module.source_bucket.arn
@@ -207,33 +203,23 @@ module "job_queue" {
     ]
   })
 
-  tags = {
-    Name = "job-queue"
-  }
+  tags = var.tags
 }
 
 resource "aws_lambda_event_source_mapping" "sqs_to_lambda" {
   event_source_arn                   = module.job_queue.arn
   function_name                      = module.job_submit_function.arn
-  batch_size                         = 10
-  maximum_batching_window_in_seconds = 5
+  batch_size                         = var.sqs_batch_size
+  maximum_batching_window_in_seconds = var.sqs_batch_window_seconds
   function_response_types            = ["ReportBatchItemFailures"]
 }
 
-# -----------------------------------------------------------------------------------------
-# Cloudwatch logs for Batch job
-# -----------------------------------------------------------------------------------------
-resource "aws_cloudwatch_log_group" "batch_logs" {
-  name              = "/aws/batch/job"
-  retention_in_days = 14
-}
-
-# -----------------------------------------------------------------------------------------
-# DynamoDb Configuration ( For storing job metadata and state)
-# -----------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# 6. Amazon DynamoDB State Tracking Table
+# ------------------------------------------------------------------------------
 module "job_metadata_state" {
   source = "./modules/dynamodb"
-  name   = "media-watermark-records"
+  name   = var.dynamodb_table_name
   attributes = [
     {
       name = "RecordId"
@@ -244,21 +230,32 @@ module "job_metadata_state" {
       type = "S"
     }
   ]
-  billing_mode          = "PAY_PER_REQUEST"
+  billing_mode          = var.dynamodb_billing_mode
   hash_key              = "RecordId"
   range_key             = "filename"
-  ttl_attribute_name    = "TimeToExist"
-  ttl_attribute_enabled = true
+  ttl_attribute_name    = var.dynamodb_ttl_attribute_name
+  ttl_attribute_enabled = var.dynamodb_ttl_enabled
+  pitr_enabled          = var.dynamodb_pitr_enabled
+  tags                  = var.tags
 }
 
-# -----------------------------------------------------------------------------------------
-# Lambda Configuration
-# -----------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# 7. CloudWatch Logs for AWS Batch
+# ------------------------------------------------------------------------------
+resource "aws_cloudwatch_log_group" "batch_logs" {
+  name              = "/aws/batch/job"
+  retention_in_days = var.batch_log_retention_days
+  tags              = var.tags
+}
+
+# ------------------------------------------------------------------------------
+# 8. AWS Lambda Function & Execution Role
+# ------------------------------------------------------------------------------
 module "job_submit_function_iam_role" {
   source             = "./modules/iam"
-  role_name          = "job-submit-function-iam-role"
+  role_name          = "${var.project_name}-lambda-role"
   role_description   = "IAM role for media watermark job submitter lambda function"
-  policy_name        = "job-submit-function-iam-policy"
+  policy_name        = "${var.project_name}-lambda-policy"
   policy_description = "IAM policy granting Batch, DynamoDB, SQS, VPC, and CloudWatch permissions"
 
   assume_role_policy = jsonencode({
@@ -273,6 +270,7 @@ module "job_submit_function_iam_role" {
       }
     ]
   })
+
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -298,7 +296,7 @@ module "job_submit_function_iam_role" {
         Resource = [
           aws_batch_job_queue.batch_job_queue.arn,
           aws_batch_job_definition.batch_job_definition.arn,
-          "arn:aws:batch:${var.region}:${data.aws_caller_identity.current.account_id}:job-definition/${aws_batch_job_definition.batch_job_definition.name}:*",
+          "arn:aws:batch:${var.region}:${data.aws_caller_identity.current.account_id}:job-definition/${var.batch_job_definition_name}:*",
           "arn:aws:batch:${var.region}:${data.aws_caller_identity.current.account_id}:job/*"
         ]
       },
@@ -342,7 +340,7 @@ module "job_submit_function_iam_role" {
 
 module "job_submit_function" {
   source        = "./modules/lambda"
-  function_name = "watermark-job-submit"
+  function_name = var.lambda_function_name
   role_arn      = module.job_submit_function_iam_role.arn
   permissions   = []
 
@@ -352,31 +350,34 @@ module "job_submit_function" {
   }
 
   env_variables = {
-    REGION                 = var.region
-    JOB_QUEUE_ARN          = aws_batch_job_queue.batch_job_queue.arn
-    JOB_DEFINITION_ARN     = aws_batch_job_definition.batch_job_definition.arn
-    DYNAMODB_TABLE         = module.job_metadata_state.name
-    DESTINATION_BUCKET     = module.destination_bucket.bucket
-    DEFAULT_WATERMARK_TEXT = "CONFIDENTIAL"
+    REGION                     = var.region
+    JOB_QUEUE_ARN              = aws_batch_job_queue.batch_job_queue.arn
+    JOB_DEFINITION_ARN         = aws_batch_job_definition.batch_job_definition.arn
+    DYNAMODB_TABLE             = module.job_metadata_state.name
+    DESTINATION_BUCKET         = module.destination_bucket.bucket
+    DEFAULT_WATERMARK_TEXT     = var.default_watermark_text
+    DEFAULT_WATERMARK_TYPE     = var.default_watermark_type
+    DEFAULT_WATERMARK_POSITION = var.default_watermark_position
+    DEFAULT_WATERMARK_OPACITY  = tostring(var.default_watermark_opacity)
   }
 
   handler          = "job_submit_function.lambda_handler"
-  runtime          = "python3.12"
+  runtime          = var.lambda_runtime
+  timeout          = var.lambda_timeout
+  memory_size      = var.lambda_memory_size
   s3_bucket        = module.job_submit_function_code.bucket
   s3_key           = "job_submit_function.zip"
   source_code_hash = filebase64sha256("${path.module}/files/job_submit_function.zip")
   layers           = []
 
-  tags = {
-    Name = "watermark-job-submit"
-  }
+  tags = var.tags
 }
 
-# -----------------------------------------------------------------------------------------
-# EventBridge: Batch Job State Change Rule (Updates DynamoDB to COMPLETED / FAILED)
-# -----------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# 9. EventBridge: Batch Job State Change Rule (Updates DynamoDB to COMPLETED / FAILED)
+# ------------------------------------------------------------------------------
 resource "aws_cloudwatch_event_rule" "batch_job_events" {
-  name        = "batch-job-state-change"
+  name        = "${var.project_name}-batch-state-change"
   description = "Captures AWS Batch job state changes (SUCCEEDED, FAILED) to update DynamoDB"
 
   event_pattern = jsonencode({
@@ -387,6 +388,7 @@ resource "aws_cloudwatch_event_rule" "batch_job_events" {
       jobQueue = [aws_batch_job_queue.batch_job_queue.arn]
     }
   })
+  tags = var.tags
 }
 
 resource "aws_cloudwatch_event_target" "batch_job_events_target" {
@@ -403,12 +405,13 @@ resource "aws_lambda_permission" "allow_eventbridge_to_invoke_lambda" {
   source_arn    = aws_cloudwatch_event_rule.batch_job_events.arn
 }
 
-# -----------------------------------------------------------------------------------------
-# Batch Configuration (Fargate Compute in Private Subnets)
-# -----------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# 10. AWS Batch Compute Environment & Job Roles
+# ------------------------------------------------------------------------------
 resource "aws_batch_compute_environment" "batch_compute" {
+  name = "${var.project_name}-${var.batch_compute_environment_name}"
   compute_resources {
-    max_vcpus = 16
+    max_vcpus = var.batch_max_vcpus
 
     security_group_ids = [
       module.batch_job_security_group.id
@@ -421,12 +424,14 @@ resource "aws_batch_compute_environment" "batch_compute" {
   service_role = aws_iam_role.aws_batch_service_role.arn
   type         = "MANAGED"
   depends_on   = [aws_iam_role_policy_attachment.aws_batch_service_role]
+  tags         = var.tags
 }
 
 # ECS Task Execution Role (Pulling images from ECR, sending logs to CloudWatch)
 resource "aws_iam_role" "ecs_task_execution_role" {
-  name               = "ecs_task_execution_role"
+  name               = "${var.project_name}-ecs-execution-role"
   assume_role_policy = data.aws_iam_policy_document.assume_role_policy.json
+  tags               = var.tags
 }
 
 data "aws_iam_policy_document" "assume_role_policy" {
@@ -452,8 +457,9 @@ resource "aws_iam_role_policy_attachment" "ecr_registry_role_policy" {
 
 # Dedicated Container Task Job Role (Runtime application permissions for S3 read/write)
 resource "aws_iam_role" "batch_job_role" {
-  name               = "batch-job-task-role"
+  name               = "${var.project_name}-task-job-role"
   assume_role_policy = data.aws_iam_policy_document.assume_role_policy.json
+  tags               = var.tags
 }
 
 resource "aws_iam_role_policy" "batch_job_s3_policy" {
@@ -483,7 +489,7 @@ resource "aws_iam_role_policy" "batch_job_s3_policy" {
 }
 
 resource "aws_batch_job_definition" "batch_job_definition" {
-  name                  = "batch-job-definition"
+  name                  = var.batch_job_definition_name
   type                  = "container"
   platform_capabilities = ["FARGATE"]
   container_properties = jsonencode({
@@ -495,11 +501,11 @@ resource "aws_batch_job_definition" "batch_job_definition" {
       platformVersion = "LATEST"
     },
     resourceRequirements = [
-      { type = "VCPU", value = "2.0" },
-      { type = "MEMORY", value = "4096" }
+      { type = "VCPU", value = var.batch_default_vcpu },
+      { type = "MEMORY", value = var.batch_default_memory }
     ],
     ephemeralStorage = {
-      sizeInGiB = 50
+      sizeInGiB = var.batch_ephemeral_storage_gb
     },
     networkConfiguration = {
       assignPublicIp = "DISABLED"
@@ -514,10 +520,11 @@ resource "aws_batch_job_definition" "batch_job_definition" {
     }
   })
   depends_on = [aws_cloudwatch_log_group.batch_logs]
+  tags       = var.tags
 }
 
 resource "aws_batch_job_queue" "batch_job_queue" {
-  name     = "batch-job-queue"
+  name     = var.batch_job_queue_name
   state    = "ENABLED"
   priority = 1
 
@@ -525,18 +532,20 @@ resource "aws_batch_job_queue" "batch_job_queue" {
     order               = 1
     compute_environment = aws_batch_compute_environment.batch_compute.arn
   }
+  tags = var.tags
 }
 
-# -----------------------------------------------------------------------------------------
-# CloudWatch Operational Alarms
-# -----------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# 11. CloudWatch Operational Alarms
+# ------------------------------------------------------------------------------
 resource "aws_cloudwatch_metric_alarm" "sqs_dlq_alarm" {
-  alarm_name          = "media-batch-sqs-dlq-messages-visible"
+  count               = var.enable_alarms ? 1 : 0
+  alarm_name          = "${var.project_name}-sqs-dlq-messages"
   comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
+  evaluation_periods  = var.alarm_evaluation_periods
   metric_name         = "ApproximateNumberOfMessagesVisible"
   namespace           = "AWS/SQS"
-  period              = 60
+  period              = var.alarm_period_seconds
   statistic           = "Maximum"
   threshold           = 0
   alarm_description   = "Triggers when poison messages accumulate in the Batch SQS Dead Letter Queue"
@@ -544,15 +553,17 @@ resource "aws_cloudwatch_metric_alarm" "sqs_dlq_alarm" {
   dimensions = {
     QueueName = module.job_queue.dlq_name
   }
+  tags = var.tags
 }
 
 resource "aws_cloudwatch_metric_alarm" "lambda_errors_alarm" {
-  alarm_name          = "media-batch-lambda-errors"
+  count               = var.enable_alarms ? 1 : 0
+  alarm_name          = "${var.project_name}-lambda-errors"
   comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
+  evaluation_periods  = var.alarm_evaluation_periods
   metric_name         = "Errors"
   namespace           = "AWS/Lambda"
-  period              = 60
+  period              = var.alarm_period_seconds
   statistic           = "Sum"
   threshold           = 0
   alarm_description   = "Triggers when watermark job submit Lambda invocations fail"
@@ -560,4 +571,5 @@ resource "aws_cloudwatch_metric_alarm" "lambda_errors_alarm" {
   dimensions = {
     FunctionName = module.job_submit_function.function_name
   }
+  tags = var.tags
 }

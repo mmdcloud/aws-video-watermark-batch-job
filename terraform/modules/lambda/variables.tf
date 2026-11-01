@@ -46,3 +46,11 @@ variable "source_code_hash" {
   type    = string
   default = null
 }
+variable "timeout" {
+  type    = number
+  default = 30
+}
+variable "memory_size" {
+  type    = number
+  default = 256
+}

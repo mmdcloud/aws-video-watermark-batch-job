@@ -40,3 +40,28 @@ output "ecr_repository_url" {
   value       = module.ecr.repository_url
   description = "ECR repository URL hosting the Batch container image"
 }
+
+output "vpc_id" {
+  value       = module.vpc.vpc_id
+  description = "ID of the VPC"
+}
+
+output "private_subnet_ids" {
+  value       = module.vpc.private_subnets
+  description = "IDs of the private subnets where Batch tasks and Lambda ENIs run"
+}
+
+output "lambda_function_name" {
+  value       = module.job_submit_function.function_name
+  description = "Name of the orchestrator Lambda function"
+}
+
+output "batch_job_queue_name" {
+  value       = aws_batch_job_queue.batch_job_queue.name
+  description = "Name of the AWS Batch job queue"
+}
+
+output "batch_job_definition_name" {
+  value       = aws_batch_job_definition.batch_job_definition.name
+  description = "Name of the AWS Batch job definition"
+}

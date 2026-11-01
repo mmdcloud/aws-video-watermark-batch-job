@@ -1,7 +1,7 @@
 # SQS Dead Letter Queue
 resource "aws_sqs_queue" "dlq" {
   name                      = "${var.queue_name}-dlq"
-  message_retention_seconds = 1209600 # 14 days retention for poison messages
+  message_retention_seconds = var.dlq_message_retention_seconds
   tags = merge(
     {
       Name = "${var.queue_name}-dlq"
