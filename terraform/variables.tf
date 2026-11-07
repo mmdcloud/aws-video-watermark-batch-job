@@ -108,7 +108,7 @@ variable "lambda_code_bucket_prefix" {
 variable "s3_force_destroy" {
   description = "Whether to force destroy media S3 buckets containing objects (keep false in prod)"
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "s3_versioning_enabled" {

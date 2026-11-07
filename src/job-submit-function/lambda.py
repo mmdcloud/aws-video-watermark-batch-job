@@ -19,7 +19,7 @@ Role & Architecture:
      - Submits jobs to AWS Batch via `boto3.client('batch').submit_job`.
   3. State Management (Amazon DynamoDB):
      - Maintains complete lifecycle state (SUBMITTED, FAILED, etc.) in the
-       configured DynamoDB table (`invoice-records`).
+       configured DynamoDB table (`media-watermark-records`).
      - Uses Hash Key `RecordId` (Job ID or deterministic UUID) and Range Key
        `filename` (Source S3 Key).
      - Sets TTL (`TimeToExist`) for automated table item lifecycle management.
