@@ -1,19 +1,51 @@
 variable "name" {
-  type = string
+  description = "Name of the ECR repository"
+  type        = string
 }
+
 variable "image_tag_mutability" {
-  type = string
+  description = "The tag mutability setting for the repository (MUTABLE or IMMUTABLE)"
+  type        = string
 }
+
 variable "force_delete" {
-  type = bool
+  description = "Whether to force delete the repository even if it contains images"
+  type        = bool
+  default     = true
 }
+
 variable "scan_on_push" {
-  type = bool
+  description = "Indicates whether images are scanned after being pushed to the repository"
+  type        = bool
+  default     = true
 }
-variable "bash_command" {
-  type = string
+
+variable "enable_lifecycle_policy" {
+  description = "Whether to attach a lifecycle policy to the ECR repository"
+  type        = bool
+  default     = true
 }
-variable "triggers" {
-  type    = map(string)
-  default = {}
+
+variable "lifecycle_policy" {
+  description = "Custom ECR lifecycle policy JSON document. If null or empty, a production default policy is applied."
+  type        = string
+  default     = null
+}
+
+variable "encryption_type" {
+  description = "The encryption type to use for the repository (AES256 or KMS)"
+  type        = string
+  default     = null
+}
+
+variable "kms_key" {
+  description = "The ARN of the KMS key to use when encryption_type is KMS"
+  type        = string
+  default     = null
+}
+
+variable "tags" {
+  description = "A mapping of tags to assign to the ECR repository"
+  type        = map(string)
+  default     = {}
 }

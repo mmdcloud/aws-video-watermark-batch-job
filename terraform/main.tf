@@ -96,12 +96,23 @@ module "ecr" {
   force_delete         = true
   scan_on_push         = var.ecr_scan_on_push
   image_tag_mutability = var.ecr_image_tag_mutability
-  bash_command         = "bash ${path.module}/../src/batch-job/artifact_push.sh ${var.region}"
+  tags                 = var.tags
+}
+
+resource "null_resource" "build_and_push_image" {
   triggers = {
     dockerfile_hash = filemd5("${path.module}/../src/batch-job/Dockerfile")
     main_py_hash    = filemd5("${path.module}/../src/batch-job/main.py")
     reqs_hash       = filemd5("${path.module}/../src/batch-job/requirements.txt")
   }
+
+  provisioner "local-exec" {
+    command = "bash ${path.module}/../src/batch-job/artifact_push.sh ${var.region}"
+  }
+
+  depends_on = [
+    module.ecr
+  ]
 }
 
 # ------------------------------------------------------------------------------
