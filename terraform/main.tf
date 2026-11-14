@@ -34,21 +34,24 @@ resource "aws_iam_role_policy_attachment" "aws_batch_service_role" {
 # 2. VPC & Networking Configuration
 # ------------------------------------------------------------------------------
 module "vpc" {
-  source                  = "./modules/vpc"
-  vpc_name                = var.vpc_name
-  vpc_cidr                = var.vpc_cidr
-  azs                     = var.azs
-  public_subnets          = var.public_subnets
-  private_subnets         = var.private_subnets
-  enable_dns_hostnames    = true
-  enable_dns_support      = true
-  create_igw              = true
-  map_public_ip_on_launch = true
-  enable_nat_gateway      = var.enable_nat_gateway
-  single_nat_gateway      = var.single_nat_gateway
-  one_nat_gateway_per_az  = false
-  enable_s3_endpoint      = var.enable_s3_endpoint
-  tags                    = var.tags
+  source                     = "./modules/vpc"
+  vpc_name                   = var.vpc_name
+  vpc_cidr                   = var.vpc_cidr
+  azs                        = var.azs
+  public_subnets             = var.public_subnets
+  private_subnets            = var.private_subnets
+  enable_dns_hostnames       = true
+  enable_dns_support         = true
+  create_igw                 = true
+  map_public_ip_on_launch    = true
+  enable_nat_gateway         = var.enable_nat_gateway
+  single_nat_gateway         = var.single_nat_gateway
+  one_nat_gateway_per_az     = false
+  enable_s3_endpoint         = var.enable_s3_endpoint
+  enable_dynamodb_endpoint   = var.enable_dynamodb_endpoint
+  enable_interface_endpoints = var.enable_vpc_interface_endpoints
+  enable_batch_endpoint      = var.enable_batch_endpoint
+  tags                       = var.tags
 }
 
 # Security Groups
@@ -355,10 +358,10 @@ module "job_submit_function" {
   role_arn      = module.job_submit_function_iam_role.arn
   permissions   = []
 
-  vpc_config = {
+  vpc_config = var.enable_lambda_vpc ? {
     security_group_ids = [module.lambda_sg.id]
     subnet_ids         = module.vpc.private_subnets
-  }
+  } : null
 
   env_variables = {
     REGION                     = var.region

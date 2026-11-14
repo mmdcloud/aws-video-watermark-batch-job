@@ -65,3 +65,28 @@ output "batch_job_definition_name" {
   value       = aws_batch_job_definition.batch_job_definition.name
   description = "Name of the AWS Batch job definition"
 }
+
+output "s3_endpoint_id" {
+  value       = module.vpc.s3_endpoint_id
+  description = "ID of the S3 Gateway VPC Endpoint"
+}
+
+output "dynamodb_endpoint_id" {
+  value       = module.vpc.dynamodb_endpoint_id
+  description = "ID of the DynamoDB Gateway VPC Endpoint"
+}
+
+output "ecr_api_endpoint_id" {
+  value       = module.vpc.ecr_api_endpoint_id
+  description = "ID of the ECR API Interface VPC Endpoint"
+}
+
+output "ecr_dkr_endpoint_id" {
+  value       = module.vpc.ecr_dkr_endpoint_id
+  description = "ID of the ECR DKR Interface VPC Endpoint"
+}
+
+output "logs_endpoint_id" {
+  value       = module.vpc.logs_endpoint_id
+  description = "ID of the CloudWatch Logs Interface VPC Endpoint"
+}

@@ -67,21 +67,39 @@ variable "private_subnets" {
 }
 
 variable "enable_nat_gateway" {
-  description = "Provision NAT Gateway for private subnet outbound internet access"
+  description = "Provision NAT Gateway for private subnet outbound internet access (disabled in Option 2 pure PrivateLink architecture)"
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "single_nat_gateway" {
   description = "Use a single NAT Gateway across all AZs to optimize costs"
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "enable_s3_endpoint" {
-  description = "Enable S3 Gateway VPC Endpoint to avoid NAT Gateway data transfer charges"
+  description = "Enable S3 Gateway VPC Endpoint to avoid NAT Gateway data transfer charges and enable private ECR layer pulls"
   type        = bool
   default     = true
+}
+
+variable "enable_dynamodb_endpoint" {
+  description = "Enable DynamoDB Gateway VPC Endpoint for zero-cost private access"
+  type        = bool
+  default     = true
+}
+
+variable "enable_vpc_interface_endpoints" {
+  description = "Enable VPC Interface Endpoints (PrivateLink) for ECR API, ECR DKR, and CloudWatch Logs to allow Fargate tasks in private subnets to run without a NAT Gateway"
+  type        = bool
+  default     = true
+}
+
+variable "enable_batch_endpoint" {
+  description = "Enable AWS Batch Interface Endpoint (only needed if Lambda or internal compute is inside the VPC)"
+  type        = bool
+  default     = false
 }
 
 # ------------------------------------------------------------------------------
@@ -108,7 +126,7 @@ variable "lambda_code_bucket_prefix" {
 variable "s3_force_destroy" {
   description = "Whether to force destroy media S3 buckets containing objects (keep false in prod)"
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "s3_versioning_enabled" {
@@ -216,6 +234,12 @@ variable "dynamodb_pitr_enabled" {
 # ------------------------------------------------------------------------------
 # 6. Ingestion & Orchestration (Lambda)
 # ------------------------------------------------------------------------------
+variable "enable_lambda_vpc" {
+  description = "Whether to place the Lambda orchestrator inside the VPC (defaults to false for serverless direct AWS API routing without NAT or ENI overhead)"
+  type        = bool
+  default     = false
+}
+
 variable "lambda_function_name" {
   description = "Name of the job submission Lambda function"
   type        = string

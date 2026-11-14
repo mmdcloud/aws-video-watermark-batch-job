@@ -43,7 +43,10 @@ A production-grade, event-driven serverless media processing pipeline deployed v
                                   │                                ▼           │   │
                                   │                       [ Fargate Task ]     │   │
                                   │                       - Private Subnets    │   │
+                                  │                       - NO NAT Gateway     │   │
                                   │                       - S3 VPC Gateway     │   │
+                                  │                       - DynamoDB Gateway   │   │
+                                  │                       - ECR & Logs Endpts  │   │
                                   │                       - FFmpeg Transcode   │   │
                                   │                       - 50 GiB Ephemeral   │   │
                                   │                                │           │   │
@@ -130,16 +133,18 @@ A production-grade, event-driven serverless media processing pipeline deployed v
 
 ## Infrastructure Specifications
 
-### 1. Networking & VPC
+### 1. Networking & VPC (Option 2: 100% PrivateLink Architecture)
 * **CIDR Block**: `10.0.0.0/16` across 3 Availability Zones (`us-east-1a`, `us-east-1b`, `us-east-1c`).
 * **Subnets**: 3 public subnets (`10.0.1.0/24`, `10.0.2.0/24`, `10.0.3.0/24`) and 3 private subnets (`10.0.4.0/24`, `10.0.5.0/24`, `10.0.6.0/24`).
-* **Internet Connectivity & S3 Routing**:
-  * Internet Gateway for public subnet egress.
-  * Single NAT Gateway providing managed outbound connectivity for Lambda ENIs and ECR container image pulls.
-  * **S3 Gateway VPC Endpoint**: Provisioned via `aws_vpc_endpoint.s3` to route all S3 multipart traffic privately across AWS internal network, eliminating NAT data transfer costs.
+* **Internet Connectivity & Zero NAT Gateway Design**:
+  * **NAT Gateway**: **Disabled** (`enable_nat_gateway = false`), eliminating recurring monthly idle NAT fees (~$32.40/mo) and data transfer charges.
+  * **S3 Gateway VPC Endpoint**: Provisioned via `aws_vpc_endpoint.s3` for zero-cost internal S3 multipart media streaming and ECR container layer blob downloads.
+  * **DynamoDB Gateway VPC Endpoint**: Provisioned via `aws_vpc_endpoint.dynamodb` for zero-cost private state table access.
+  * **ECR & CloudWatch PrivateLink Endpoints**: Interface VPC Endpoints provisioned for `ecr.api`, `ecr.dkr`, and `logs` with private DNS enabled, allowing Fargate tasks in private subnets to authenticate, pull container images, and stream CloudWatch logs with zero internet egress.
 * **Security Groups**:
   * `${var.project_name}-batch-sg`: Zero inbound rules (`ingress_rules = []`); outbound all traffic (`-1` to `0.0.0.0/0`) for S3, ECR, and CloudWatch.
-  * `${var.project_name}-lambda-sg`: Outbound HTTPS (`tcp/443` to `0.0.0.0/0`) for secure communication with AWS service APIs.
+  * `${var.vpc_name}-endpoints-sg`: Dedicated security group attached to VPC Interface Endpoints allowing HTTPS (`tcp/443`) strictly from within the VPC CIDR.
+  * `${var.project_name}-lambda-sg`: Outbound HTTPS (`tcp/443`) available for Lambda if VPC placement is enabled.
 
 ### 2. Storage & Queuing
 * **Amazon S3**:
@@ -270,10 +275,13 @@ terraform apply tfplan
 | `vpc_cidr` | `string` | `"10.0.0.0/16"` | CIDR block for the dedicated VPC |
 | `azs` | `list(string)` | `["us-east-1a", "us-east-1b", "us-east-1c"]` | Availability Zones for multi-AZ subnet deployment |
 | `public_subnets` | `list(string)` | `["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]` | Public Subnet CIDRs for Internet Gateway egress |
-| `private_subnets` | `list(string)` | `["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]` | Private Subnet CIDRs for Lambda ENIs & Batch workers |
-| `enable_nat_gateway` | `bool` | `true` | Provision NAT Gateway for private subnet outbound access |
-| `single_nat_gateway` | `bool` | `true` | Single NAT Gateway across AZs for cost optimization |
-| `enable_s3_endpoint` | `bool` | `true` | S3 Gateway VPC Endpoint to avoid NAT data charges |
+| `private_subnets` | `list(string)` | `["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]` | Private Subnet CIDRs for Batch workers & endpoints |
+| `enable_nat_gateway` | `bool` | `false` | NAT Gateway disabled (saves ~$32.40/mo idle cost) |
+| `single_nat_gateway` | `bool` | `false` | Single NAT Gateway toggle across AZs |
+| `enable_s3_endpoint` | `bool` | `true` | S3 Gateway Endpoint for media streaming & ECR layers |
+| `enable_dynamodb_endpoint` | `bool` | `true` | DynamoDB Gateway Endpoint for zero-cost private state access |
+| `enable_vpc_interface_endpoints` | `bool` | `true` | PrivateLink Endpoints for ECR API, ECR DKR, and CloudWatch Logs |
+| `enable_batch_endpoint` | `bool` | `false` | AWS Batch Interface Endpoint (only if Lambda runs in VPC) |
 
 #### Storage (Amazon S3)
 | Variable | Type | Default | Description |
@@ -310,6 +318,7 @@ terraform apply tfplan
 #### Orchestration & Ingestion (AWS Lambda)
 | Variable | Type | Default | Description |
 | :--- | :---: | :---: | :--- |
+| `enable_lambda_vpc` | `bool` | `false` | Place Lambda in VPC (false runs serverless at $0 cost) |
 | `lambda_function_name` | `string` | `"watermark-job-submit"` | Name of the job submitter Lambda function |
 | `lambda_runtime` | `string` | `"python3.12"` | Python runtime for the Lambda function |
 | `lambda_timeout` | `number` | `30` | Lambda execution timeout in seconds |
@@ -360,7 +369,12 @@ terraform apply tfplan
 | `job_definition_arn` | `string` | ARN of the AWS Batch job definition |
 | `ecr_repository_url` | `string` | ECR repository URL hosting the Batch container image |
 | `vpc_id` | `string` | ID of the provisioned multi-AZ VPC |
-| `private_subnet_ids` | `list(string)` | Private subnets hosting Lambda ENIs and Batch Fargate tasks |
+| `private_subnet_ids` | `list(string)` | Private subnets hosting Batch Fargate tasks |
+| `s3_endpoint_id` | `string` | ID of the S3 Gateway VPC Endpoint |
+| `dynamodb_endpoint_id` | `string` | ID of the DynamoDB Gateway VPC Endpoint |
+| `ecr_api_endpoint_id` | `string` | ID of the ECR API Interface VPC Endpoint |
+| `ecr_dkr_endpoint_id` | `string` | ID of the ECR DKR Interface VPC Endpoint |
+| `logs_endpoint_id` | `string` | ID of the CloudWatch Logs Interface VPC Endpoint |
 
 ---
 

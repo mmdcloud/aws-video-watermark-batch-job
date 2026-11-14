@@ -26,12 +26,17 @@ azs             = ["us-east-1a", "us-east-1b", "us-east-1c"]
 public_subnets  = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
 private_subnets = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
 
-# Cost-optimized NAT Gateway: single NAT across AZs
-enable_nat_gateway = true
-single_nat_gateway = true
+# Option 2: 100% Private Architecture with VPC Endpoints (NAT Gateway disabled)
+enable_nat_gateway = false
+single_nat_gateway = false
 
-# S3 Gateway VPC Endpoint: Routes all S3 traffic privately at zero data fee
-enable_s3_endpoint = true
+# Gateway VPC Endpoints ($0.00 / free): routes S3 and DynamoDB privately
+enable_s3_endpoint       = true
+enable_dynamodb_endpoint = true
+
+# Interface VPC Endpoints (PrivateLink): enables private subnet ECR pulls and CloudWatch logs
+enable_vpc_interface_endpoints = true
+enable_batch_endpoint          = false
 
 # ------------------------------------------------------------------------------
 # 3. Amazon S3 Storage
@@ -67,6 +72,7 @@ dynamodb_pitr_enabled       = true # Continuous point-in-time recovery
 # ------------------------------------------------------------------------------
 # 6. AWS Lambda Orchestrator
 # ------------------------------------------------------------------------------
+enable_lambda_vpc    = false # Direct AWS serverless network (0 NAT/ENI cost)
 lambda_function_name = "watermark-job-submit"
 lambda_runtime       = "python3.12"
 lambda_timeout       = 30

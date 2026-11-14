@@ -26,9 +26,13 @@ azs             = ["us-east-1a", "us-east-1b", "us-east-1c"]
 public_subnets  = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
 private_subnets = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
 
-enable_nat_gateway = true
-single_nat_gateway = true
-enable_s3_endpoint = true
+# Option 2: 100% Private Architecture with VPC Endpoints (NAT Gateway disabled)
+enable_nat_gateway             = false
+single_nat_gateway             = false
+enable_s3_endpoint             = true
+enable_dynamodb_endpoint       = true
+enable_vpc_interface_endpoints = true
+enable_batch_endpoint          = false
 
 # ------------------------------------------------------------------------------
 # 3. Amazon S3 Storage
@@ -62,6 +66,7 @@ dynamodb_pitr_enabled       = true
 # ------------------------------------------------------------------------------
 # 6. AWS Lambda Orchestrator
 # ------------------------------------------------------------------------------
+enable_lambda_vpc          = false
 lambda_function_name       = "watermark-job-submit"
 lambda_runtime             = "python3.12"
 lambda_timeout             = 30
