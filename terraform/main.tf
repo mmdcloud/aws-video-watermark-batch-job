@@ -390,7 +390,8 @@ module "job_submit_function" {
 # ------------------------------------------------------------------------------
 # 9. EventBridge: Batch Job State Change Rule (Updates DynamoDB to COMPLETED / FAILED)
 # ------------------------------------------------------------------------------
-resource "aws_cloudwatch_event_rule" "batch_job_events" {
+module "batch_job_events" {
+  source      = "./modules/eventbridge"
   name        = "${var.project_name}-batch-state-change"
   description = "Captures AWS Batch job state changes (SUCCEEDED, FAILED) to update DynamoDB"
 
@@ -402,21 +403,17 @@ resource "aws_cloudwatch_event_rule" "batch_job_events" {
       jobQueue = [aws_batch_job_queue.batch_job_queue.arn]
     }
   })
+
+  targets = {
+    "watermark-job-submit-lambda" = {
+      arn                      = module.job_submit_function.arn
+      statement_id             = "AllowExecutionFromEventBridge"
+      attach_lambda_permission = true
+      lambda_function_name     = module.job_submit_function.function_name
+    }
+  }
+
   tags = var.tags
-}
-
-resource "aws_cloudwatch_event_target" "batch_job_events_target" {
-  rule      = aws_cloudwatch_event_rule.batch_job_events.name
-  target_id = "watermark-job-submit-lambda"
-  arn       = module.job_submit_function.arn
-}
-
-resource "aws_lambda_permission" "allow_eventbridge_to_invoke_lambda" {
-  statement_id  = "AllowExecutionFromEventBridge"
-  action        = "lambda:InvokeFunction"
-  function_name = module.job_submit_function.function_name
-  principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.batch_job_events.arn
 }
 
 # ------------------------------------------------------------------------------

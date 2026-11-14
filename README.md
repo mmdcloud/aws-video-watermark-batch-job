@@ -118,6 +118,7 @@ A production-grade, event-driven serverless media processing pipeline deployed v
 │       ├── cloudwatch/                 # CloudWatch log group & alarms module
 │       ├── dynamodb/                   # DynamoDB state table module
 │       ├── ecr/                        # Amazon ECR repository module
+│       ├── eventbridge/                # EventBridge rule, targets & permissions module
 │       ├── iam/                        # IAM roles & policies module
 │       ├── lambda/                     # AWS Lambda deployment module
 │       ├── s3/                         # S3 bucket, CORS & notification module
