@@ -220,6 +220,12 @@ module "job_queue" {
   tags = var.tags
 }
 
+# Import existing mapping if present in account to avoid 409 ResourceConflictException
+import {
+  to = aws_lambda_event_source_mapping.sqs_to_lambda
+  id = "7d1a9696-c1b0-4747-88ac-ca94fb0d83c4"
+}
+
 resource "aws_lambda_event_source_mapping" "sqs_to_lambda" {
   event_source_arn                   = module.job_queue.arn
   function_name                      = module.job_submit_function.arn
