@@ -1,9 +1,11 @@
 output "job_queue_arn" {
-  value = aws_batch_job_queue.batch_job_queue.arn
+  value       = module.batch.job_queue_arn
+  description = "ARN of the AWS Batch job queue"
 }
 
 output "job_definition_arn" {
-  value = aws_batch_job_definition.batch_job_definition.arn
+  value       = module.batch.job_definition_arn
+  description = "ARN of the AWS Batch job definition"
 }
 
 output "source_bucket_name" {
@@ -57,13 +59,38 @@ output "lambda_function_name" {
 }
 
 output "batch_job_queue_name" {
-  value       = aws_batch_job_queue.batch_job_queue.name
+  value       = module.batch.job_queue_name
   description = "Name of the AWS Batch job queue"
 }
 
 output "batch_job_definition_name" {
-  value       = aws_batch_job_definition.batch_job_definition.name
+  value       = module.batch.job_definition_name
   description = "Name of the AWS Batch job definition"
+}
+
+output "batch_compute_environment_arn" {
+  value       = module.batch.compute_environment_arn
+  description = "ARN of the AWS Batch compute environment"
+}
+
+output "batch_service_role_arn" {
+  value       = module.batch.batch_service_role_arn
+  description = "ARN of the AWS Batch service role"
+}
+
+output "batch_execution_role_arn" {
+  value       = module.batch.execution_role_arn
+  description = "ARN of the ECS task execution role"
+}
+
+output "batch_job_role_arn" {
+  value       = module.batch.job_role_arn
+  description = "ARN of the container task application job role"
+}
+
+output "batch_log_group_arn" {
+  value       = module.batch.log_group_arn
+  description = "ARN of the CloudWatch Log Group for Batch jobs"
 }
 
 output "s3_endpoint_id" {

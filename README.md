@@ -368,6 +368,11 @@ terraform apply tfplan
 | `job_queue_arn` | `string` | ARN of the AWS Batch job queue |
 | `batch_job_definition_name` | `string` | Name of the AWS Batch job definition |
 | `job_definition_arn` | `string` | ARN of the AWS Batch job definition |
+| `batch_compute_environment_arn` | `string` | ARN of the AWS Batch compute environment |
+| `batch_service_role_arn` | `string` | ARN of the AWS Batch service role |
+| `batch_execution_role_arn` | `string` | ARN of the ECS task execution role (ECR/CloudWatch) |
+| `batch_job_role_arn` | `string` | ARN of the container task application job role (S3 scoped) |
+| `batch_log_group_arn` | `string` | ARN of the CloudWatch Log Group for Batch jobs |
 | `ecr_repository_url` | `string` | ECR repository URL hosting the Batch container image |
 | `vpc_id` | `string` | ID of the provisioned multi-AZ VPC |
 | `private_subnet_ids` | `list(string)` | Private subnets hosting Batch Fargate tasks |
@@ -384,8 +389,8 @@ terraform apply tfplan
 | Variable | Description | Source / Default |
 | :--- | :--- | :--- |
 | `REGION` | AWS Region | `var.region` |
-| `JOB_QUEUE_ARN` | Target AWS Batch Job Queue ARN | `aws_batch_job_queue.batch_job_queue.arn` |
-| `JOB_DEFINITION_ARN` | Target AWS Batch Job Definition ARN | `aws_batch_job_definition.batch_job_definition.arn` |
+| `JOB_QUEUE_ARN` | Target AWS Batch Job Queue ARN | `module.batch.job_queue_arn` |
+| `JOB_DEFINITION_ARN` | Target AWS Batch Job Definition ARN | `module.batch.job_definition_arn` |
 | `DYNAMODB_TABLE` | State Tracking Table | `module.job_metadata_state.name` (`media-watermark-records`) |
 | `DESTINATION_BUCKET` | Target S3 Bucket for Watermarked Output | `module.destination_bucket.bucket` |
 | `DEFAULT_WATERMARK_TEXT` | Fallback watermark string | `var.default_watermark_text` (`"CONFIDENTIAL"`) |

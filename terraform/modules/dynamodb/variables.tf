@@ -1,11 +1,11 @@
 variable "name" {}
 variable "billing_mode" {}
 variable "read_capacity" {
-  type = number
+  type    = number
   default = null
 }
 variable "write_capacity" {
-  type = number
+  type    = number
   default = null
 }
 variable "hash_key" {}

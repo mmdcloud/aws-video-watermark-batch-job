@@ -5,33 +5,7 @@
 data "aws_caller_identity" "current" {}
 
 # ------------------------------------------------------------------------------
-# 1. IAM Service Role for AWS Batch
-# ------------------------------------------------------------------------------
-data "aws_iam_policy_document" "batch_assume_role" {
-  statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRole"]
-
-    principals {
-      type        = "Service"
-      identifiers = ["batch.amazonaws.com"]
-    }
-  }
-}
-
-resource "aws_iam_role" "aws_batch_service_role" {
-  name               = "${var.project_name}-batch-service-role"
-  assume_role_policy = data.aws_iam_policy_document.batch_assume_role.json
-  tags               = var.tags
-}
-
-resource "aws_iam_role_policy_attachment" "aws_batch_service_role" {
-  role       = aws_iam_role.aws_batch_service_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSBatchServiceRole"
-}
-
-# ------------------------------------------------------------------------------
-# 2. VPC & Networking Configuration
+# 1. VPC & Networking Configuration
 # ------------------------------------------------------------------------------
 module "vpc" {
   source                     = "./modules/vpc"
@@ -220,12 +194,6 @@ module "job_queue" {
   tags = var.tags
 }
 
-# Import existing mapping if present in account to avoid 409 ResourceConflictException
-import {
-  to = aws_lambda_event_source_mapping.sqs_to_lambda
-  id = "7d1a9696-c1b0-4747-88ac-ca94fb0d83c4"
-}
-
 resource "aws_lambda_event_source_mapping" "sqs_to_lambda" {
   event_source_arn                   = module.job_queue.arn
   function_name                      = module.job_submit_function.arn
@@ -260,16 +228,7 @@ module "job_metadata_state" {
 }
 
 # ------------------------------------------------------------------------------
-# 7. CloudWatch Logs for AWS Batch
-# ------------------------------------------------------------------------------
-resource "aws_cloudwatch_log_group" "batch_logs" {
-  name              = "/aws/batch/job"
-  retention_in_days = var.batch_log_retention_days
-  tags              = var.tags
-}
-
-# ------------------------------------------------------------------------------
-# 8. AWS Lambda Function & Execution Role
+# 7. AWS Lambda Function & Execution Role
 # ------------------------------------------------------------------------------
 module "job_submit_function_iam_role" {
   source             = "./modules/iam"
@@ -314,8 +273,8 @@ module "job_submit_function_iam_role" {
           "batch:TagResource"
         ]
         Resource = [
-          aws_batch_job_queue.batch_job_queue.arn,
-          aws_batch_job_definition.batch_job_definition.arn,
+          module.batch.job_queue_arn,
+          module.batch.job_definition_arn,
           "arn:aws:batch:${var.region}:${data.aws_caller_identity.current.account_id}:job-definition/${var.batch_job_definition_name}:*",
           "arn:aws:batch:${var.region}:${data.aws_caller_identity.current.account_id}:job/*"
         ]
@@ -371,8 +330,8 @@ module "job_submit_function" {
 
   env_variables = {
     REGION                     = var.region
-    JOB_QUEUE_ARN              = aws_batch_job_queue.batch_job_queue.arn
-    JOB_DEFINITION_ARN         = aws_batch_job_definition.batch_job_definition.arn
+    JOB_QUEUE_ARN              = module.batch.job_queue_arn
+    JOB_DEFINITION_ARN         = module.batch.job_definition_arn
     DYNAMODB_TABLE             = module.job_metadata_state.name
     DESTINATION_BUCKET         = module.destination_bucket.bucket
     DEFAULT_WATERMARK_TEXT     = var.default_watermark_text
@@ -406,7 +365,7 @@ module "batch_job_events" {
     detail-type = ["Batch Job State Change"]
     detail = {
       status   = ["SUCCEEDED", "FAILED"]
-      jobQueue = [aws_batch_job_queue.batch_job_queue.arn]
+      jobQueue = [module.batch.job_queue_arn]
     }
   })
 
@@ -423,137 +382,35 @@ module "batch_job_events" {
 }
 
 # ------------------------------------------------------------------------------
-# 10. AWS Batch Compute Environment & Job Roles
+# 9. AWS Batch (Compute Environment, Queue, Job Definition & Dedicated Roles)
 # ------------------------------------------------------------------------------
-resource "aws_batch_compute_environment" "batch_compute" {
-  name = "${var.project_name}-${var.batch_compute_environment_name}"
-  compute_resources {
-    max_vcpus = var.batch_max_vcpus
+module "batch" {
+  source = "./modules/batch"
 
-    security_group_ids = [
-      module.batch_job_security_group.id
-    ]
-
-    subnets = module.vpc.private_subnets
-    type    = "FARGATE"
-  }
-
-  service_role = aws_iam_role.aws_batch_service_role.arn
-  type         = "MANAGED"
-  depends_on   = [aws_iam_role_policy_attachment.aws_batch_service_role]
-  tags         = var.tags
-}
-
-# ECS Task Execution Role (Pulling images from ECR, sending logs to CloudWatch)
-resource "aws_iam_role" "ecs_task_execution_role" {
-  name               = "${var.project_name}-ecs-execution-role"
-  assume_role_policy = data.aws_iam_policy_document.assume_role_policy.json
-  tags               = var.tags
-}
-
-data "aws_iam_policy_document" "assume_role_policy" {
-  statement {
-    actions = ["sts:AssumeRole"]
-
-    principals {
-      type        = "Service"
-      identifiers = ["ecs-tasks.amazonaws.com"]
-    }
-  }
-}
-
-resource "aws_iam_role_policy_attachment" "ecs_task_execution_role_policy" {
-  role       = aws_iam_role.ecs_task_execution_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-}
-
-resource "aws_iam_role_policy_attachment" "ecr_registry_role_policy" {
-  role       = aws_iam_role.ecs_task_execution_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
-}
-
-# Dedicated Container Task Job Role (Runtime application permissions for S3 read/write)
-resource "aws_iam_role" "batch_job_role" {
-  name               = "${var.project_name}-task-job-role"
-  assume_role_policy = data.aws_iam_policy_document.assume_role_policy.json
-  tags               = var.tags
-}
-
-resource "aws_iam_role_policy" "batch_job_s3_policy" {
-  name = "batch-job-s3-access"
-  role = aws_iam_role.batch_job_role.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid      = "ReadSourceBucket"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:ListBucket"]
-        Resource = [module.source_bucket.arn, "${module.source_bucket.arn}/*"]
-      },
-      {
-        Sid    = "WriteDestinationBucket"
-        Effect = "Allow"
-        Action = [
-          "s3:PutObject",
-          "s3:AbortMultipartUpload"
-        ]
-        Resource = ["${module.destination_bucket.arn}/*"]
-      }
-    ]
-  })
-}
-
-resource "aws_batch_job_definition" "batch_job_definition" {
-  name                  = var.batch_job_definition_name
-  type                  = "container"
-  platform_capabilities = ["FARGATE"]
-  container_properties = jsonencode({
-    image            = "${module.ecr.repository_url}:latest",
-    environment      = []
-    jobRoleArn       = aws_iam_role.batch_job_role.arn,
-    executionRoleArn = aws_iam_role.ecs_task_execution_role.arn,
-    fargatePlatformConfiguration = {
-      platformVersion = "LATEST"
-    },
-    resourceRequirements = [
-      { type = "VCPU", value = var.batch_default_vcpu },
-      { type = "MEMORY", value = var.batch_default_memory }
-    ],
-    ephemeralStorage = {
-      sizeInGiB = var.batch_ephemeral_storage_gb
-    },
-    networkConfiguration = {
-      assignPublicIp = "DISABLED"
-    },
-    logConfiguration = {
-      logDriver = "awslogs",
-      options = {
-        "awslogs-group"         = "${aws_cloudwatch_log_group.batch_logs.name}",
-        "awslogs-region"        = var.region,
-        "awslogs-stream-prefix" = "batch"
-      }
-    }
-  })
-  depends_on = [aws_cloudwatch_log_group.batch_logs]
-  tags       = var.tags
-}
-
-resource "aws_batch_job_queue" "batch_job_queue" {
-  name     = var.batch_job_queue_name
-  state    = "ENABLED"
-  priority = 1
-
-  compute_environment_order {
-    order               = 1
-    compute_environment = aws_batch_compute_environment.batch_compute.arn
-  }
-  tags = var.tags
+  project_name             = var.project_name
+  compute_environment_name = "${var.project_name}-${var.batch_compute_environment_name}"
+  job_queue_name           = var.batch_job_queue_name
+  job_queue_priority       = 1
+  job_definition_name      = var.batch_job_definition_name
+  compute_type             = "FARGATE"
+  max_vcpus                = var.batch_max_vcpus
+  subnets                  = module.vpc.private_subnets
+  security_group_ids       = [module.batch_job_security_group.id]
+  container_image          = "${module.ecr.repository_url}:latest"
+  default_vcpu             = var.batch_default_vcpu
+  default_memory           = var.batch_default_memory
+  ephemeral_storage_gb     = var.batch_ephemeral_storage_gb
+  assign_public_ip         = "DISABLED"
+  log_group_name           = "/aws/batch/job"
+  log_retention_days       = var.batch_log_retention_days
+  region                   = var.region
+  source_bucket_arns       = [module.source_bucket.arn]
+  destination_bucket_arns  = [module.destination_bucket.arn]
+  tags                     = var.tags
 }
 
 # ------------------------------------------------------------------------------
-# 11. CloudWatch Operational Alarms
+# 10. CloudWatch Operational Alarms
 # ------------------------------------------------------------------------------
 resource "aws_cloudwatch_metric_alarm" "sqs_dlq_alarm" {
   count               = var.enable_alarms ? 1 : 0
