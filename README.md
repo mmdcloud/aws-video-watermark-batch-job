@@ -334,6 +334,9 @@ terraform apply tfplan
 | :--- | :---: | :---: | :--- |
 | `batch_compute_environment_name` | `string` | `"batch-compute"` | Name suffix for AWS Batch Fargate environment |
 | `batch_job_queue_name` | `string` | `"batch-job-queue"` | Name of the AWS Batch job queue |
+| `create_batch_scheduling_policy` | `bool` | `false` | Optional fair share scheduling policy creation toggle |
+| `batch_scheduling_policy_name` | `string` | `null` | Optional custom name for the scheduling policy |
+| `batch_fair_share_policy` | `object` | `null` | Fair share parameters (`compute_reservation`, `share_decay_seconds`, `share_distribution`) |
 | `batch_job_definition_name` | `string` | `"batch-job-definition"` | Name of the AWS Batch job definition |
 | `batch_max_vcpus` | `number` | `16` | Maximum vCPUs for Batch compute auto-scaling |
 | `batch_default_vcpu` | `string` | `"2.0"` | Default vCPU allocated per Batch task |
@@ -365,6 +368,7 @@ terraform apply tfplan
 | `dynamodb_table_name` | `string` | DynamoDB table tracking job state, timestamps & metadata |
 | `lambda_function_name` | `string` | Name of the orchestrator Lambda function |
 | `batch_job_queue_name` | `string` | Name of the AWS Batch job queue |
+| `batch_scheduling_policy_arn` | `string` | ARN of the AWS Batch scheduling policy (if enabled) |
 | `job_queue_arn` | `string` | ARN of the AWS Batch job queue |
 | `batch_job_definition_name` | `string` | Name of the AWS Batch job definition |
 | `job_definition_arn` | `string` | ARN of the AWS Batch job definition |
@@ -381,6 +385,8 @@ terraform apply tfplan
 | `ecr_api_endpoint_id` | `string` | ID of the ECR API Interface VPC Endpoint |
 | `ecr_dkr_endpoint_id` | `string` | ID of the ECR DKR Interface VPC Endpoint |
 | `logs_endpoint_id` | `string` | ID of the CloudWatch Logs Interface VPC Endpoint |
+| `sqs_dlq_alarm_arn` | `string` | ARN of the SQS Dead Letter Queue CloudWatch metric alarm |
+| `lambda_errors_alarm_arn` | `string` | ARN of the Lambda errors CloudWatch metric alarm |
 
 ---
 

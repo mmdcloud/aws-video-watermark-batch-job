@@ -18,6 +18,16 @@ output "job_queue_arn" {
   value       = aws_batch_job_queue.batch_job_queue.arn
 }
 
+output "scheduling_policy_name" {
+  description = "Name of the AWS Batch scheduling policy"
+  value       = try(aws_batch_scheduling_policy.batch_scheduling_policy[0].name, null)
+}
+
+output "scheduling_policy_arn" {
+  description = "ARN of the AWS Batch scheduling policy"
+  value       = local.scheduling_policy_arn
+}
+
 output "job_definition_name" {
   description = "Name of the AWS Batch job definition"
   value       = aws_batch_job_definition.batch_job_definition.name

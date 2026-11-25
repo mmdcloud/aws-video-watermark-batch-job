@@ -406,14 +406,19 @@ module "batch" {
   region                   = var.region
   source_bucket_arns       = [module.source_bucket.arn]
   destination_bucket_arns  = [module.destination_bucket.arn]
+  create_scheduling_policy = var.create_batch_scheduling_policy
+  scheduling_policy_name   = var.batch_scheduling_policy_name
+  fair_share_policy        = var.batch_fair_share_policy
   tags                     = var.tags
 }
 
 # ------------------------------------------------------------------------------
 # 10. CloudWatch Operational Alarms
 # ------------------------------------------------------------------------------
-resource "aws_cloudwatch_metric_alarm" "sqs_dlq_alarm" {
-  count               = var.enable_alarms ? 1 : 0
+module "sqs_dlq_alarm" {
+  source = "./modules/cloudwatch/cloudwatch-alarm"
+  count  = var.enable_alarms ? 1 : 0
+
   alarm_name          = "${var.project_name}-sqs-dlq-messages"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = var.alarm_evaluation_periods
@@ -423,6 +428,7 @@ resource "aws_cloudwatch_metric_alarm" "sqs_dlq_alarm" {
   statistic           = "Maximum"
   threshold           = 0
   alarm_description   = "Triggers when poison messages accumulate in the Batch SQS Dead Letter Queue"
+  alarm_actions       = []
 
   dimensions = {
     QueueName = module.job_queue.dlq_name
@@ -430,8 +436,10 @@ resource "aws_cloudwatch_metric_alarm" "sqs_dlq_alarm" {
   tags = var.tags
 }
 
-resource "aws_cloudwatch_metric_alarm" "lambda_errors_alarm" {
-  count               = var.enable_alarms ? 1 : 0
+module "lambda_errors_alarm" {
+  source = "./modules/cloudwatch/cloudwatch-alarm"
+  count  = var.enable_alarms ? 1 : 0
+
   alarm_name          = "${var.project_name}-lambda-errors"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = var.alarm_evaluation_periods
@@ -441,6 +449,7 @@ resource "aws_cloudwatch_metric_alarm" "lambda_errors_alarm" {
   statistic           = "Sum"
   threshold           = 0
   alarm_description   = "Triggers when watermark job submit Lambda invocations fail"
+  alarm_actions       = []
 
   dimensions = {
     FunctionName = module.job_submit_function.function_name

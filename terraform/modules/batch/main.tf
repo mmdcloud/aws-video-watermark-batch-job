@@ -66,12 +66,48 @@ resource "aws_batch_compute_environment" "batch_compute" {
 }
 
 # ------------------------------------------------------------------------------
-# 4. AWS Batch Job Queue
+# 4. AWS Batch Scheduling Policy (Optional Fair Share Scheduling)
+# ------------------------------------------------------------------------------
+locals {
+  scheduling_policy_name = var.scheduling_policy_name != null ? var.scheduling_policy_name : "${var.project_name}-scheduling-policy"
+}
+
+resource "aws_batch_scheduling_policy" "batch_scheduling_policy" {
+  count = var.create_scheduling_policy ? 1 : 0
+
+  name = local.scheduling_policy_name
+
+  dynamic "fair_share_policy" {
+    for_each = var.fair_share_policy != null ? [var.fair_share_policy] : []
+    content {
+      compute_reservation = try(fair_share_policy.value.compute_reservation, null)
+      share_decay_seconds = try(fair_share_policy.value.share_decay_seconds, null)
+
+      dynamic "share_distribution" {
+        for_each = try(fair_share_policy.value.share_distribution, [])
+        content {
+          share_identifier = share_distribution.value.share_identifier
+          weight_factor    = try(share_distribution.value.weight_factor, null)
+        }
+      }
+    }
+  }
+
+  tags = var.tags
+}
+
+locals {
+  scheduling_policy_arn = var.create_scheduling_policy ? aws_batch_scheduling_policy.batch_scheduling_policy[0].arn : var.scheduling_policy_arn
+}
+
+# ------------------------------------------------------------------------------
+# 5. AWS Batch Job Queue
 # ------------------------------------------------------------------------------
 resource "aws_batch_job_queue" "batch_job_queue" {
-  name     = var.job_queue_name
-  state    = var.job_queue_state
-  priority = var.job_queue_priority
+  name                  = var.job_queue_name
+  state                 = var.job_queue_state
+  priority              = var.job_queue_priority
+  scheduling_policy_arn = local.scheduling_policy_arn
 
   compute_environment_order {
     order               = 1

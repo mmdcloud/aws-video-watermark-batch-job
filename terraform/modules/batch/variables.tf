@@ -194,3 +194,34 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "create_scheduling_policy" {
+  description = "Whether to create an AWS Batch scheduling policy (Fair Share Scheduling)"
+  type        = bool
+  default     = false
+}
+
+variable "scheduling_policy_name" {
+  description = "Name of the AWS Batch scheduling policy. Defaults to '<project_name>-scheduling-policy' if null"
+  type        = string
+  default     = null
+}
+
+variable "scheduling_policy_arn" {
+  description = "ARN of an existing AWS Batch scheduling policy to associate with the job queue (used if create_scheduling_policy is false)"
+  type        = string
+  default     = null
+}
+
+variable "fair_share_policy" {
+  description = "Fair share policy configuration for the scheduling policy"
+  type = object({
+    compute_reservation = optional(number)
+    share_decay_seconds = optional(number)
+    share_distribution = optional(list(object({
+      share_identifier = string
+      weight_factor    = optional(number)
+    })), [])
+  })
+  default = null
+}

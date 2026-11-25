@@ -303,6 +303,31 @@ variable "batch_job_queue_name" {
   default     = "batch-job-queue"
 }
 
+variable "create_batch_scheduling_policy" {
+  description = "Whether to create an optional AWS Batch scheduling policy (Fair Share Scheduling)"
+  type        = bool
+  default     = false
+}
+
+variable "batch_scheduling_policy_name" {
+  description = "Name of the AWS Batch scheduling policy. Defaults to '<project_name>-scheduling-policy' if null"
+  type        = string
+  default     = null
+}
+
+variable "batch_fair_share_policy" {
+  description = "Fair share policy configuration for the AWS Batch scheduling policy"
+  type = object({
+    compute_reservation = optional(number)
+    share_decay_seconds = optional(number)
+    share_distribution = optional(list(object({
+      share_identifier = string
+      weight_factor    = optional(number)
+    })), [])
+  })
+  default = null
+}
+
 variable "batch_job_definition_name" {
   description = "Name of the AWS Batch job definition"
   type        = string

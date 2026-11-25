@@ -63,6 +63,11 @@ output "batch_job_queue_name" {
   description = "Name of the AWS Batch job queue"
 }
 
+output "batch_scheduling_policy_arn" {
+  value       = module.batch.scheduling_policy_arn
+  description = "ARN of the AWS Batch scheduling policy (if enabled)"
+}
+
 output "batch_job_definition_name" {
   value       = module.batch.job_definition_name
   description = "Name of the AWS Batch job definition"
@@ -91,6 +96,16 @@ output "batch_job_role_arn" {
 output "batch_log_group_arn" {
   value       = module.batch.log_group_arn
   description = "ARN of the CloudWatch Log Group for Batch jobs"
+}
+
+output "sqs_dlq_alarm_arn" {
+  value       = try(module.sqs_dlq_alarm[0].arn, null)
+  description = "ARN of the SQS Dead Letter Queue CloudWatch metric alarm"
+}
+
+output "lambda_errors_alarm_arn" {
+  value       = try(module.lambda_errors_alarm[0].arn, null)
+  description = "ARN of the Lambda errors CloudWatch metric alarm"
 }
 
 output "s3_endpoint_id" {
