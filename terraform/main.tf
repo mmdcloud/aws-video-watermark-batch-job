@@ -3,6 +3,12 @@
 # ==============================================================================
 
 data "aws_caller_identity" "current" {}
+data "aws_partition" "current" {}
+
+locals {
+  source_bucket_name = "${var.source_bucket_prefix}-${var.region}-${data.aws_caller_identity.current.account_id}"
+  source_bucket_arn  = "arn:${data.aws_partition.current.partition}:s3:::${local.source_bucket_name}"
+}
 
 # ------------------------------------------------------------------------------
 # 1. VPC & Networking Configuration
@@ -97,7 +103,7 @@ resource "null_resource" "build_and_push_image" {
 # ------------------------------------------------------------------------------
 module "source_bucket" {
   source             = "./modules/s3"
-  bucket_name        = "${var.source_bucket_prefix}-${var.region}-${data.aws_caller_identity.current.account_id}"
+  bucket_name        = local.source_bucket_name
   objects            = []
   versioning_enabled = var.s3_versioning_enabled
   cors = [
@@ -119,7 +125,8 @@ module "source_bucket" {
     ]
     lambda_function = []
   }
-  tags = var.tags
+  depends_on = [module.job_queue]
+  tags       = var.tags
 }
 
 module "destination_bucket" {
@@ -208,7 +215,12 @@ module "job_queue" {
         {
           test     = "ArnEquals"
           variable = "aws:SourceArn"
-          values   = [module.source_bucket.arn]
+          values   = [local.source_bucket_arn]
+        },
+        {
+          test     = "StringEquals"
+          variable = "aws:SourceAccount"
+          values   = [data.aws_caller_identity.current.account_id]
         }
       ]
     }
@@ -451,7 +463,8 @@ module "sqs_dlq_alarm" {
   statistic           = "Maximum"
   threshold           = 0
   alarm_description   = "Triggers when poison messages accumulate in the Batch SQS Dead Letter Queue"
-  alarm_actions       = []
+  alarm_actions       = var.alarm_actions
+  treat_missing_data  = "notBreaching"
 
   dimensions = {
     QueueName = module.job_queue_dlq.name
@@ -472,10 +485,107 @@ module "lambda_errors_alarm" {
   statistic           = "Sum"
   threshold           = 0
   alarm_description   = "Triggers when watermark job submit Lambda invocations fail"
-  alarm_actions       = []
+  alarm_actions       = var.alarm_actions
+  treat_missing_data  = "notBreaching"
 
   dimensions = {
     FunctionName = module.job_submit_function.function_name
   }
   tags = var.tags
+}
+
+locals {
+  operational_alarms = {
+    sqs_oldest_message_age = {
+      alarm_name          = "${var.project_name}-sqs-oldest-message-age"
+      comparison_operator = "GreaterThanThreshold"
+      metric_name         = "ApproximateAgeOfOldestMessage"
+      namespace           = "AWS/SQS"
+      statistic           = "Maximum"
+      threshold           = var.alarm_sqs_max_message_age_seconds
+      alarm_description   = "Triggers when messages remain unconsumed in the main SQS job queue past the age threshold"
+      dimensions = {
+        QueueName = module.job_queue.name
+      }
+    }
+    lambda_throttles = {
+      alarm_name          = "${var.project_name}-lambda-throttles"
+      comparison_operator = "GreaterThanThreshold"
+      metric_name         = "Throttles"
+      namespace           = "AWS/Lambda"
+      statistic           = "Sum"
+      threshold           = 0
+      alarm_description   = "Triggers when watermark job submit Lambda invocations are throttled by concurrency limits"
+      dimensions = {
+        FunctionName = module.job_submit_function.function_name
+      }
+    }
+    lambda_duration = {
+      alarm_name          = "${var.project_name}-lambda-high-duration"
+      comparison_operator = "GreaterThanThreshold"
+      metric_name         = "Duration"
+      namespace           = "AWS/Lambda"
+      statistic           = "Maximum"
+      threshold           = floor(var.lambda_timeout * 1000 * 0.8)
+      alarm_description   = "Triggers when watermark job submit Lambda latency reaches 80% of its configured timeout"
+      dimensions = {
+        FunctionName = module.job_submit_function.function_name
+      }
+    }
+    batch_failed_jobs = {
+      alarm_name          = "${var.project_name}-batch-failed-jobs"
+      comparison_operator = "GreaterThanThreshold"
+      metric_name         = "JobsMovedToFailed"
+      namespace           = "AWS/Batch"
+      statistic           = "Sum"
+      threshold           = 0
+      alarm_description   = "Triggers when AWS Batch FFmpeg watermarking jobs transition to the FAILED state"
+      dimensions = {
+        JobQueueName = module.batch.job_queue_name
+      }
+    }
+    eventbridge_failed_invocations = {
+      alarm_name          = "${var.project_name}-eventbridge-failed-invocations"
+      comparison_operator = "GreaterThanThreshold"
+      metric_name         = "FailedInvocations"
+      namespace           = "AWS/Events"
+      statistic           = "Sum"
+      threshold           = 0
+      alarm_description   = "Triggers when EventBridge fails to invoke the Lambda state-updater target for Batch job events"
+      dimensions = {
+        RuleName = module.batch_job_events.rule_name
+      }
+    }
+    dynamodb_write_throttles = {
+      alarm_name          = "${var.project_name}-dynamodb-write-throttles"
+      comparison_operator = "GreaterThanThreshold"
+      metric_name         = "WriteThrottleEvents"
+      namespace           = "AWS/DynamoDB"
+      statistic           = "Sum"
+      threshold           = 0
+      alarm_description   = "Triggers when DynamoDB job state writes experience throttling"
+      dimensions = {
+        TableName = module.job_metadata_state.name
+      }
+    }
+  }
+}
+
+module "operational_alarms" {
+  source   = "./modules/cloudwatch/cloudwatch-alarm"
+  for_each = var.enable_alarms ? local.operational_alarms : {}
+
+  alarm_name          = each.value.alarm_name
+  comparison_operator = each.value.comparison_operator
+  evaluation_periods  = var.alarm_evaluation_periods
+  metric_name         = each.value.metric_name
+  namespace           = each.value.namespace
+  period              = var.alarm_period_seconds
+  statistic           = each.value.statistic
+  threshold           = each.value.threshold
+  alarm_description   = each.value.alarm_description
+  alarm_actions       = var.alarm_actions
+  treat_missing_data  = "notBreaching"
+  dimensions          = each.value.dimensions
+  tags                = var.tags
 }

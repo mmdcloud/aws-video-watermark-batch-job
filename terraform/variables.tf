@@ -402,3 +402,15 @@ variable "alarm_period_seconds" {
   type        = number
   default     = 60
 }
+
+variable "alarm_actions" {
+  description = "List of ARNs (e.g., SNS topic ARNs) to notify when operational CloudWatch alarms trigger"
+  type        = list(string)
+  default     = []
+}
+
+variable "alarm_sqs_max_message_age_seconds" {
+  description = "Maximum age in seconds for an unconsumed message in the main SQS queue before alarming"
+  type        = number
+  default     = 600
+}

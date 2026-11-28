@@ -353,6 +353,8 @@ terraform apply tfplan
 | `enable_alarms` | `bool` | `true` | Provision CloudWatch alarms for DLQ & Lambda errors |
 | `alarm_evaluation_periods` | `number` | `1` | Evaluation periods before triggering CloudWatch alarms |
 | `alarm_period_seconds` | `number` | `60` | Period in seconds over which alarm statistic is applied |
+| `alarm_actions` | `list(string)` | `[]` | Notification ARNs (e.g. SNS topics) triggered on alarm |
+| `alarm_sqs_max_message_age_seconds` | `number` | `600` | Max message age in main SQS queue before alarming |
 
 ---
 
@@ -387,6 +389,7 @@ terraform apply tfplan
 | `logs_endpoint_id` | `string` | ID of the CloudWatch Logs Interface VPC Endpoint |
 | `sqs_dlq_alarm_arn` | `string` | ARN of the SQS Dead Letter Queue CloudWatch metric alarm |
 | `lambda_errors_alarm_arn` | `string` | ARN of the Lambda errors CloudWatch metric alarm |
+| `operational_alarm_arns` | `map(string)` | Map of ARNs for SQS age, Lambda throttles/duration, Batch failures, EventBridge failures & DynamoDB throttles alarms |
 
 ---
 

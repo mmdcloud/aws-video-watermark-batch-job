@@ -108,6 +108,11 @@ output "lambda_errors_alarm_arn" {
   description = "ARN of the Lambda errors CloudWatch metric alarm"
 }
 
+output "operational_alarm_arns" {
+  value       = { for k, alarm in module.operational_alarms : k => alarm.arn }
+  description = "Map of additional operational CloudWatch metric alarm ARNs (SQS age, Lambda throttles/duration, Batch failures, EventBridge failures, DynamoDB throttles)"
+}
+
 output "s3_endpoint_id" {
   value       = module.vpc.s3_endpoint_id
   description = "ID of the S3 Gateway VPC Endpoint"
