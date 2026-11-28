@@ -10,16 +10,18 @@ output "url" {
   value = aws_sqs_queue.queue.url
 }
 
-output "dlq_arn" {
-  value = aws_sqs_queue.dlq.arn
+output "id" {
+  value = aws_sqs_queue.queue.id
 }
 
-output "dlq_name" {
-  value = aws_sqs_queue.dlq.name
+output "fifo_queue" {
+  value = aws_sqs_queue.queue.fifo_queue
 }
 
-output "dlq_url" {
-  value = aws_sqs_queue.dlq.url
+output "policy_id" {
+  value = try(aws_sqs_queue_policy.queue_policy[0].id, null)
 }
 
-
+output "redrive_allow_policy_id" {
+  value = try(aws_sqs_queue_redrive_allow_policy.redrive_allow[0].id, null)
+}

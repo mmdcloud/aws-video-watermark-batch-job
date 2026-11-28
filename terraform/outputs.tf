@@ -24,12 +24,12 @@ output "sqs_queue_name" {
 }
 
 output "sqs_dlq_name" {
-  value       = module.job_queue.dlq_name
+  value       = module.job_queue_dlq.name
   description = "SQS Dead Letter Queue buffering poison messages"
 }
 
 output "sqs_dlq_url" {
-  value       = module.job_queue.dlq_url
+  value       = module.job_queue_dlq.url
   description = "URL of the SQS Dead Letter Queue"
 }
 

@@ -161,35 +161,58 @@ module "job_submit_function_code" {
 }
 
 # ------------------------------------------------------------------------------
-# 5. Amazon SQS Queuing (Main Queue + DLQ)
+# 5. Amazon SQS Queuing (Dead Letter Queue + Main Queue)
 # ------------------------------------------------------------------------------
-module "job_queue" {
-  source                        = "./modules/sqs"
-  queue_name                    = var.sqs_queue_name
-  delay_seconds                 = 0
-  maxReceiveCount               = var.sqs_max_receive_count
-  dlq_message_retention_seconds = var.sqs_dlq_retention_seconds
-  max_message_size              = var.sqs_max_message_size
-  message_retention_seconds     = var.sqs_message_retention_seconds
-  visibility_timeout_seconds    = var.sqs_visibility_timeout_seconds
-  receive_wait_time_seconds     = var.sqs_receive_wait_time_seconds
+module "job_queue_dlq" {
+  source                           = "./modules/sqs"
+  queue_name                       = "${var.sqs_queue_name}-dlq"
+  message_retention_seconds        = var.sqs_dlq_retention_seconds
+  visibility_timeout_seconds       = var.sqs_visibility_timeout_seconds
+  receive_wait_time_seconds        = var.sqs_receive_wait_time_seconds
+  max_message_size                 = var.sqs_max_message_size
+  redrive_permission               = "byQueue"
+  redrive_allow_source_queue_names = [var.sqs_queue_name]
+  enforce_tls                      = true
+  sqs_managed_sse_enabled          = true
+  tags                             = var.tags
+}
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect    = "Allow"
-        Principal = { Service = "s3.amazonaws.com" }
-        Action    = "sqs:SendMessage"
-        Resource  = "arn:aws:sqs:${var.region}:*:${var.sqs_queue_name}"
-        Condition = {
-          ArnEquals = {
-            "aws:SourceArn" = module.source_bucket.arn
-          }
-        }
-      }
-    ]
+module "job_queue" {
+  source                     = "./modules/sqs"
+  queue_name                 = var.sqs_queue_name
+  delay_seconds              = 0
+  max_message_size           = var.sqs_max_message_size
+  message_retention_seconds  = var.sqs_message_retention_seconds
+  visibility_timeout_seconds = var.sqs_visibility_timeout_seconds
+  receive_wait_time_seconds  = var.sqs_receive_wait_time_seconds
+  enforce_tls                = true
+  sqs_managed_sse_enabled    = true
+
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = module.job_queue_dlq.arn
+    maxReceiveCount     = var.sqs_max_receive_count
   })
+
+  queue_policy_statements = {
+    s3_send_message = {
+      sid     = "AllowS3BucketNotifications"
+      effect  = "Allow"
+      actions = ["sqs:SendMessage"]
+      principals = [
+        {
+          type        = "Service"
+          identifiers = ["s3.amazonaws.com"]
+        }
+      ]
+      conditions = [
+        {
+          test     = "ArnEquals"
+          variable = "aws:SourceArn"
+          values   = [module.source_bucket.arn]
+        }
+      ]
+    }
+  }
 
   tags = var.tags
 }
@@ -300,7 +323,7 @@ module "job_submit_function_iam_role" {
         ]
         Resource = [
           module.job_queue.arn,
-          module.job_queue.dlq_arn
+          module.job_queue_dlq.arn
         ]
       },
       {
@@ -431,7 +454,7 @@ module "sqs_dlq_alarm" {
   alarm_actions       = []
 
   dimensions = {
-    QueueName = module.job_queue.dlq_name
+    QueueName = module.job_queue_dlq.name
   }
   tags = var.tags
 }
